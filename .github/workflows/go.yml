@@ -21,7 +21,7 @@ jobs:
       - name: Set up Go 1.x
         uses: actions/setup-go@v5
         with:
-          go-version: ^1.23
+          go-version: '1.24.x'
 
       - name: Set up Java (for external validation tools)
         uses: actions/setup-java@v4
@@ -152,7 +152,7 @@ jobs:
       - name: Set up Go 1.x
         uses: actions/setup-go@v5
         with:
-          go-version: ^1.23
+          go-version: '1.24.x'
 
       - name: Set up Java (for external validation tools)
         uses: actions/setup-java@v4
@@ -167,7 +167,7 @@ jobs:
           go install github.com/pdfcpu/pdfcpu/cmd/pdfcpu@latest
           
           # Install veraPDF greenfield
-          curl -L http://software.verapdf.org/rel/1.28/verapdf-greenfield-1.28.2-installer.zip -o verapdf.zip
+          curl -L https://software.verapdf.org/rel/1.28/verapdf-greenfield-1.28.2-installer.zip -o verapdf.zip
           unzip verapdf.zip
           
           # Create auto-install.xml for headless installation

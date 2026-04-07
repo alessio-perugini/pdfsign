@@ -119,13 +119,13 @@ func (d *Document) Write(output io.Writer) (*Result, error) {
 			)
 		}
 
-		// Execute signing using existing sign package
-		// Need to get a ReadSeeker from our reader
-		if rs, ok := d.reader.(io.ReadSeeker); ok {
-			err := sign.SignWithData(rs, output, d.rdr, d.size, signData)
-			if err != nil {
-				return nil, err
-			}
+		// Execute signing using existing sign package.
+		// Wrap the document reader as a ReadSeeker so signing always executes
+		// for any io.ReaderAt implementation (not just *os.File).
+		rs := io.NewSectionReader(d.reader, 0, d.size)
+		err = sign.SignWithData(rs, output, d.rdr, d.size, signData)
+		if err != nil {
+			return nil, err
 		}
 
 		// Build result info

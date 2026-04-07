@@ -3,9 +3,36 @@ package forms
 import (
 	"bytes"
 	"fmt"
+	"strings"
 
 	"github.com/digitorus/pdf"
 )
+
+// escapePDFString escapes special characters in a PDF literal string.
+// PDF literal strings are delimited by parentheses; backslashes, unbalanced
+// parentheses, and carriage-returns must be escaped to avoid corrupting the
+// object stream.
+func escapePDFString(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '(':
+			b.WriteString(`\(`)
+		case ')':
+			b.WriteString(`\)`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\n':
+			b.WriteString(`\n`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // FormField represents a form field in the document.
 type FormField struct {
@@ -107,11 +134,11 @@ func GenerateUpdate(v pdf.Value, value any) ([]byte, error) {
 			fmt.Fprintf(&buf, "  /V /Off\n")
 		}
 	case string:
-		fmt.Fprintf(&buf, "  /V (%s)\n", val)
+		fmt.Fprintf(&buf, "  /V (%s)\n", escapePDFString(val))
 	case int, int64, float64:
 		fmt.Fprintf(&buf, "  /V %v\n", val)
 	default:
-		fmt.Fprintf(&buf, "  /V (%v)\n", val)
+		fmt.Fprintf(&buf, "  /V (%s)\n", escapePDFString(fmt.Sprintf("%v", val)))
 	}
 	buf.WriteString(">>")
 

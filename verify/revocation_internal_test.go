@@ -322,12 +322,9 @@ func TestBuildChains_ErrorHandling(t *testing.T) {
 	}
 	options := DefaultVerifyOptions()
 
-	// This should run without panic and accumulate errors
-	_, err := buildCertificateChainsWithOptions(p7, signer, revInfo, options)
-	// We don't expect it to fail purely on parse errors (logs internally? no it returns errorMsg)
-	// Actually returns (string, error) where string is errorMsg
-	if err != nil {
-		// Expected: It might fail on certificate verification since cert is empty/invalid
-		t.Logf("Expected error from empty cert: %v", err)
+	// This should run without panic and accumulate parse errors into the returned error
+	err := buildCertificateChainsWithOptions(p7, signer, revInfo, options)
+	if err == nil {
+		t.Error("Expected non-nil error for unparseable OCSP/CRL data")
 	}
 }

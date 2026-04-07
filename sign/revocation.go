@@ -67,6 +67,9 @@ func embedOCSPRevocationStatus(cert, issuer *x509.Certificate, i *revocation.Inf
 	defer func() {
 		_ = resp.Body.Close()
 	}()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("OCSP server returned non-2xx status: %s", resp.Status)
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
@@ -105,6 +108,9 @@ func embedCRLRevocationStatus(cert, issuer *x509.Certificate, i *revocation.Info
 	defer func() {
 		_ = resp.Body.Close()
 	}()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("CRL server returned non-2xx status: %s", resp.Status)
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
@@ -116,9 +122,11 @@ func embedCRLRevocationStatus(cert, issuer *x509.Certificate, i *revocation.Info
 		return fmt.Errorf("failed to parse CRL: %v", err)
 	}
 
-	if err := crl.CheckSignatureFrom(issuer); err != nil {
-		// Just log or strictly fail? Strict fail is better for security.
-		return fmt.Errorf("CRL signature invalid: %v", err)
+	// Only verify CRL signature if the issuer is known
+	if issuer != nil {
+		if err := crl.CheckSignatureFrom(issuer); err != nil {
+			return fmt.Errorf("CRL signature invalid: %v", err)
+		}
 	}
 
 	for _, revoked := range crl.RevokedCertificateEntries {

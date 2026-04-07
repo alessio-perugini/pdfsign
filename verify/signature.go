@@ -115,11 +115,7 @@ func VerifySignature(v pdf.Value, file io.ReaderAt, fileSize int64, options *Ver
 	var revInfo revocation.InfoArchival
 	_ = p7.UnmarshalSignedAttribute(asn1.ObjectIdentifier{1, 2, 840, 113583, 1, 1, 8}, &revInfo)
 
-	certError, err := buildCertificateChainsWithOptions(p7, signer, revInfo, options)
-	if err != nil {
-		// This means critical failure in chain building (e.g. malformed certs that crash x509)
-		return signer, fmt.Errorf("failed to build certificate chains: %w", err)
-	}
+	certError := buildCertificateChainsWithOptions(p7, signer, revInfo, options)
 	if certError != nil {
 		signer.ValidationErrors = append(signer.ValidationErrors, certError)
 	}

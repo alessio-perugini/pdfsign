@@ -41,8 +41,6 @@ type SignData struct {
 
 	// PreSignCallback is called before the signature object is written.
 	// It allows adding additional objects (e.g., initials) using the SignContext.
-	// PreSignCallback is called before the signature object is written.
-	// It allows adding additional objects (e.g., initials) using the SignContext.
 	PreSignCallback func(context *SignContext) error
 
 	// CompressLevel determines compression level (zlib) for stream objects.

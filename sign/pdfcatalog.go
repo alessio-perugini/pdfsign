@@ -58,10 +58,14 @@ func (context *SignContext) createCatalog() ([]byte, error) {
 		fields := acroForm.Key("Fields")
 		if !fields.IsNull() && fields.Kind() == pdf.Array {
 			for i := 0; i < fields.Len(); i++ {
+				ptr := fields.Index(i).GetPtr()
+				// Skip direct objects (ID == 0 would emit invalid "0 0 R")
+				if ptr.GetID() == 0 {
+					continue
+				}
 				if fieldsAdded > 0 {
 					catalog_buffer.WriteString(" ")
 				}
-				ptr := fields.Index(i).GetPtr()
 				catalog_buffer.WriteString(strconv.Itoa(int(ptr.GetID())) + " 0 R")
 				fieldsAdded++
 			}

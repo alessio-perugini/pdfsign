@@ -121,6 +121,9 @@ func VerifyWithOptions(file io.ReaderAt, size int64, options *VerifyOptions) (ap
 
 	// Iterate over the AcroForm Fields to find signature fields
 	fields := acroForm.Key("Fields")
+	// foundField tracks whether a signature field was encountered.
+	// foundSignature tracks whether at least one was successfully processed.
+	foundField := false
 	foundSignature := false
 
 	var traverse func(pdf.Value) bool
@@ -136,7 +139,7 @@ func VerifyWithOptions(file io.ReaderAt, size int64, options *VerifyOptions) (ap
 
 					// Verify if it is a signature dictionary and has the correct filter
 					if !v.IsNull() && v.Key("Filter").Name() == "Adobe.PPKLite" {
-						foundSignature = true
+						foundField = true
 
 						// Use the new modular signature processing function
 						signer, err := VerifySignature(v, file, size, options)
@@ -144,6 +147,9 @@ func VerifyWithOptions(file io.ReaderAt, size int64, options *VerifyOptions) (ap
 							// Skip this signature if there's a critical error
 							return true // Continue to next
 						}
+
+						// Mark at least one signature as successfully processed
+						foundSignature = true
 
 						// Set any error message if present (Legacy API support)
 						if len(signer.ValidationErrors) > 0 && apiResp.Error == "" {
@@ -171,8 +177,12 @@ func VerifyWithOptions(file io.ReaderAt, size int64, options *VerifyOptions) (ap
 		traverse(fields)
 	}
 
-	if !foundSignature {
+	if !foundField {
 		return nil, fmt.Errorf("inconsistent PDF: SigFlags implies signatures but none found in AcroForm Fields")
+	}
+
+	if foundField && !foundSignature {
+		return nil, fmt.Errorf("found signature fields but failed to process any signatures")
 	}
 
 	if apiResp == nil {

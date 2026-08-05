@@ -181,13 +181,24 @@ func StartMockTSA(t *testing.T) string {
 	if err != nil {
 		Fail(t, "mock TSA: generate key: %v", err)
 	}
+	// RFC 3161 requires a TSA certificate's extended key usage extension to
+	// be critical (and contain only id-kp-timeStamping). Go's ExtKeyUsage
+	// template field always marshals this extension as non-critical, so it's
+	// built manually here via ExtraExtensions; validators that check for a
+	// conformant TSA profile (e.g. pdfcpu) otherwise reject the timestamp.
+	ekuValue, err := asn1.Marshal([]asn1.ObjectIdentifier{{1, 3, 6, 1, 5, 5, 7, 3, 8}})
+	if err != nil {
+		Fail(t, "mock TSA: marshal EKU extension: %v", err)
+	}
 	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Mock TSA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping},
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "Mock TSA"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtraExtensions: []pkix.Extension{
+			{Id: asn1.ObjectIdentifier{2, 5, 29, 37}, Critical: true, Value: ekuValue},
+		},
 		BasicConstraintsValid: true,
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)

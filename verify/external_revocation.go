@@ -2,6 +2,7 @@ package verify
 
 import (
 	"bytes"
+	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -13,6 +14,15 @@ import (
 
 	"golang.org/x/crypto/ocsp"
 )
+
+// requestContext returns options.Context, defaulting to context.Background()
+// when unset.
+func requestContext(options *VerifyOptions) context.Context {
+	if options.Context != nil {
+		return options.Context
+	}
+	return context.Background()
+}
 
 // OCSPRequestFunc allows mocking OCSP request creation for tests
 type OCSPRequestFunc func(cert, issuer *x509.Certificate) ([]byte, error)
@@ -62,10 +72,12 @@ func performExternalOCSPCheckWithFunc(cert, issuer *x509.Certificate, options *V
 		maxBytes = DefaultMaxOCSPResponseBytes
 	}
 
+	ctx := requestContext(options)
+
 	// Try each OCSP server URL
 	var lastErr error
 	for _, serverURL := range cert.OCSPServer {
-		req, err := http.NewRequest(http.MethodPost, serverURL, bytes.NewReader(ocspReq))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, serverURL, bytes.NewReader(ocspReq))
 		if err != nil {
 			lastErr = fmt.Errorf("failed to build OCSP request for %s: %v", serverURL, err)
 			continue
@@ -142,10 +154,12 @@ func performExternalCRLCheck(cert *x509.Certificate, options *VerifyOptions) (*t
 		maxBytes = DefaultMaxCRLResponseBytes
 	}
 
+	ctx := requestContext(options)
+
 	// Try each CRL distribution point
 	var lastErr error
 	for _, crlURL := range cert.CRLDistributionPoints {
-		req, err := http.NewRequest(http.MethodGet, crlURL, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, crlURL, nil)
 		if err != nil {
 			lastErr = fmt.Errorf("failed to build CRL request for %s: %v", crlURL, err)
 			continue

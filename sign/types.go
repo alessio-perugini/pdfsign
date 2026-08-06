@@ -1,6 +1,7 @@
 package sign
 
 import (
+	"context"
 	"crypto"
 	"crypto/x509"
 	"io"
@@ -57,6 +58,11 @@ type SignData struct {
 	// pkcs7.Verify. An empty slice is the default and preserves the prior
 	// behavior exactly.
 	ExtraSignedAttributes []pkcs7.Attribute
+
+	// Context bounds the TSA HTTP request made when TSA.URL is set. If nil,
+	// context.Background() is used. Cancelling it aborts an in-flight TSA
+	// request immediately.
+	Context context.Context
 
 	objectId uint32
 }

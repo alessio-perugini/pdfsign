@@ -1,6 +1,7 @@
 package sign
 
 import (
+	stdcontext "context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
@@ -189,6 +190,15 @@ func (context *SignContext) applyDefaults() {
 	if context.SignData.Appearance.Page == 0 {
 		context.SignData.Appearance.Page = 1
 	}
+	context.SignData.Context = ensureContext(context.SignData.Context)
+}
+
+// ensureContext returns ctx, defaulting to context.Background() when nil.
+func ensureContext(ctx stdcontext.Context) stdcontext.Context {
+	if ctx == nil {
+		return stdcontext.Background()
+	}
+	return ctx
 }
 
 func (context *SignContext) resetContext() {

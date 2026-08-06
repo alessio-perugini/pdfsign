@@ -75,6 +75,9 @@ func (b *VerifyBuilder) doExecute() {
 	if b.httpTimeout > 0 {
 		vOpts.HTTPTimeout = b.httpTimeout
 	}
+	if b.ctx != nil {
+		vOpts.Context = b.ctx
+	}
 
 	// Initialization validation
 	if b.doc.rdr == nil {

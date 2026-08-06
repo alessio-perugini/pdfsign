@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"time"
 
 	"github.com/digitorus/pdfsign"
@@ -63,6 +65,9 @@ func VerifyPDF(input string, enableExternalRevocation, requireDigitalSignatureKU
 		osExit(1)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	result := doc.Verify().
 		ExternalChecks(enableExternalRevocation).
 		RequireDigitalSignature(requireDigitalSignatureKU).
@@ -70,7 +75,8 @@ func VerifyPDF(input string, enableExternalRevocation, requireDigitalSignatureKU
 		TrustSignatureTime(trustSignatureTime).
 		ValidateTimestampCertificates(validateTimestampCertificates).
 		TrustSelfSigned(allowUntrustedRoots).
-		HTTPTimeout(httpTimeout)
+		HTTPTimeout(httpTimeout).
+		Context(ctx)
 
 	if err := result.Err(); err != nil {
 		fmt.Println(err)

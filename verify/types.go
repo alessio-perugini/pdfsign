@@ -4,6 +4,7 @@ package verify
 // Types are defined in verify.go to maintain backward compatibility.
 
 import (
+	"context"
 	"crypto/x509"
 	"net/http"
 	"time"
@@ -118,6 +119,12 @@ type VerifyOptions struct {
 	// AtTime controls the time used for certificate validation.
 	// If zero, the current time is used.
 	AtTime time.Time
+
+	// Context bounds external OCSP/CRL requests. If nil, context.Background()
+	// is used, so those requests are governed only by HTTPTimeout (or its
+	// 10-second default). Cancelling Context aborts an in-flight request
+	// immediately, independent of HTTPTimeout.
+	Context context.Context
 }
 
 type Response struct {

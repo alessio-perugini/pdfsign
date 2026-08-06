@@ -12,12 +12,17 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/digitorus/pkcs7"
 	"github.com/digitorus/timestamp"
 	"golang.org/x/crypto/cryptobyte"
 	cryptobyte_asn1 "golang.org/x/crypto/cryptobyte/asn1"
 )
+
+// defaultTSATimeout bounds a TSA request when SignData.Context carries no
+// deadline of its own, so an unresponsive TSA can't hang Sign() forever.
+const defaultTSATimeout = 30 * time.Second
 
 const signatureByteRangePlaceholder = "/ByteRange[0 ********** ********** **********]"
 
@@ -416,8 +421,10 @@ func (context *SignContext) GetTSA(sign_content []byte) (timestamp_response []by
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
+	ctx := ensureContext(context.SignData.Context)
+
 	ts_request_reader := bytes.NewReader(ts_request)
-	req, err := http.NewRequest("POST", context.SignData.TSA.URL, ts_request_reader)
+	req, err := http.NewRequestWithContext(ctx, "POST", context.SignData.TSA.URL, ts_request_reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare request (%s): %w", context.SignData.TSA.URL, err)
 	}
@@ -430,6 +437,9 @@ func (context *SignContext) GetTSA(sign_content []byte) (timestamp_response []by
 	}
 
 	client := &http.Client{}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		client.Timeout = defaultTSATimeout
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("POST %s failed: %w", context.SignData.TSA.URL, err)

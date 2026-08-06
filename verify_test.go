@@ -2,6 +2,7 @@ package pdfsign_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -235,6 +236,111 @@ func TestVerify_HTTPTimeoutIsApplied(t *testing.T) {
 
 	if elapsed >= time.Second {
 		t.Errorf("expected HTTPTimeout(200ms) to abort the slow OCSP request well before the server's 2s response, took %v", elapsed)
+	}
+}
+
+// TestVerify_ContextCancellation proves VerifyBuilder.Context actually
+// bounds external OCSP/CRL requests: cancelling the supplied context must
+// make Valid() return quickly even though HTTPTimeout is left at its much
+// longer default, and even though the OCSP responder never replies.
+func TestVerify_ContextCancellation(t *testing.T) {
+	slowOCSP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer slowOCSP.Close()
+
+	pki := testpki.NewTestPKI(t)
+	pki.StartCRLServer()
+	defer pki.Close()
+
+	issuerCert := pki.IntermediateCerts[len(pki.IntermediateCerts)-1]
+	issuerKey := pki.IntermediateKeys[len(pki.IntermediateKeys)-1]
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:       big.NewInt(1),
+		Subject:            pkix.Name{CommonName: "Context Cancellation Test"},
+		NotBefore:          time.Now().Add(-time.Hour),
+		NotAfter:           time.Now().Add(time.Hour),
+		KeyUsage:           x509.KeyUsageDigitalSignature,
+		UnknownExtKeyUsage: []asn1.ObjectIdentifier{{1, 3, 6, 1, 5, 5, 7, 3, 36}},
+		OCSPServer:         []string{slowOCSP.URL},
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, issuerCert, key.Public(), issuerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	doc, err := pdfsign.OpenFile("testfiles/testfile_form.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc.Sign(key, cert, pki.Chain()...).
+		Reason("Context cancellation test").
+		RevocationFunction(func(cert, issuer *x509.Certificate, i *revocation.InfoArchival) error {
+			return nil
+		})
+	var buf bytes.Buffer
+	if _, err := doc.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+
+	signedDoc, err := pdfsign.Open(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	signedDoc.Verify().TrustedRoots(pki.RootPool()).ExternalChecks(true).Context(ctx).Valid()
+	elapsed := time.Since(start)
+
+	if elapsed >= time.Second {
+		t.Errorf("expected Context cancellation at 200ms to abort the slow OCSP request well before the server's 2s response, took %v", elapsed)
+	}
+}
+
+// TestSign_ContextCancellation proves SignBuilder.Context actually bounds
+// the TSA HTTP request: cancelling the supplied context must make Write()
+// return quickly (with an error) even though the TSA responder never
+// replies, rather than hang until it does.
+func TestSign_ContextCancellation(t *testing.T) {
+	slowTSA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer slowTSA.Close()
+
+	doc, err := pdfsign.OpenFile("testfiles/testfile_form.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	doc.Timestamp(slowTSA.URL).Context(ctx)
+
+	var buf bytes.Buffer
+	start := time.Now()
+	_, err = doc.Write(&buf)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected Write to fail when the TSA request is cancelled by Context")
+	}
+	if elapsed >= time.Second {
+		t.Errorf("expected Context cancellation at 200ms to abort the slow TSA request well before the server's 2s response, took %v", elapsed)
 	}
 }
 

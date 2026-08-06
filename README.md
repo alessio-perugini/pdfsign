@@ -365,6 +365,25 @@ doc.Sign(hsmSigner, cert).
 
 The signature algorithm is determined by your `crypto.Signer` implementation (RSA, ECDSA, Ed25519).
 
+### Timeouts and Cancellation
+
+Signing (with a TSA) and verification (with `ExternalChecks`) can make outbound HTTP requests to a Time-Stamp Authority, OCSP responder, or CRL distribution point. Both `SignBuilder` and `VerifyBuilder` accept a `context.Context` to bound these requests, in addition to `VerifyBuilder.HTTPTimeout`:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+defer cancel()
+
+doc.Sign(signer, cert).
+    Timestamp(tsaURL).
+    Context(ctx) // aborts the TSA request if ctx is cancelled/expires
+
+result := doc.Verify().
+    ExternalChecks(true).
+    Context(ctx) // aborts in-flight OCSP/CRL requests if ctx is cancelled/expires
+```
+
+This is also how the CLI ties `Ctrl-C` to an immediate abort of a stuck TSA/OCSP/CRL request, via `signal.NotifyContext`, instead of waiting out the full timeout.
+
 ### External Signers (Integrations)
 
 The `signers/` directory contains "best-effort" implementations and skeletons for various external signing systems. These are provided as examples to help you integrate with hardware security modules and cloud services.

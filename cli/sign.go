@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto"
 	"crypto/x509"
 	"encoding/pem"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 
 	"github.com/digitorus/pdfsign"
 )
@@ -110,6 +112,9 @@ func signPDFImpl(input string, args []string) {
 		return
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	doc.Sign(pkey, cert).
 		Type(certTypeValue).
 		Reason(InfoReason).
@@ -117,7 +122,8 @@ func signPDFImpl(input string, args []string) {
 		Contact(InfoContact).
 		SignerName(InfoName).
 		Timestamp(TSA).
-		CertificateChains(certificateChains)
+		CertificateChains(certificateChains).
+		Context(ctx)
 
 	outputFile, err := os.Create(output)
 	if err != nil {
@@ -233,7 +239,10 @@ func TimeStampPDF(input, output, tsa string) {
 		return
 	}
 
-	doc.Timestamp(tsa)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	doc.Timestamp(tsa).Context(ctx)
 
 	outputFile, err := os.Create(output)
 	if err != nil {

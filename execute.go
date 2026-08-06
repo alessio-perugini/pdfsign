@@ -55,6 +55,7 @@ func (d *Document) Write(output io.Writer) (*Result, error) {
 			Updates:            make(map[uint32][]byte),
 			CompressLevel:      d.compressLevel,
 			RevocationFunction: sb.revocationFunc,
+			Context:            sb.ctx,
 		}
 
 		// Use default revocation function if none provided

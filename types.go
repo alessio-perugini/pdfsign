@@ -1,6 +1,7 @@
 package pdfsign
 
 import (
+	"context"
 	"crypto"
 	"crypto/x509"
 	"sync"
@@ -243,6 +244,7 @@ type SignBuilder struct {
 	preferCRL       bool
 	revocationCache sign.RevocationCache
 	unit            float64
+	ctx             context.Context
 }
 
 // RevocationCache sets the cache for revocation data (CRL/OCSP).
@@ -354,6 +356,17 @@ func (b *SignBuilder) TimestampAuth(username, password string) *SignBuilder {
 	return b
 }
 
+// Context bounds the TSA HTTP request made when Timestamp() is used:
+// cancelling ctx aborts an in-flight request immediately. Use this to tie
+// signing to a caller's own deadline or cancellation signal (e.g. an
+// incoming HTTP request's context, or os/signal.NotifyContext). If not set,
+// the request runs under context.Background(), bounded by an internal
+// default timeout.
+func (b *SignBuilder) Context(ctx context.Context) *SignBuilder {
+	b.ctx = ctx
+	return b
+}
+
 // Digest sets the hash algorithm for the signature (e.g., crypto.SHA256).
 // Default is SHA256 if not specified.
 func (b *SignBuilder) Digest(hash crypto.Hash) *SignBuilder {
@@ -425,6 +438,7 @@ type VerifyBuilder struct {
 	minECDSAKeySize       int
 	allowedAlgorithms     []x509.PublicKeyAlgorithm
 	httpTimeout           time.Duration
+	ctx                   context.Context
 
 	// Lazy execution state. once guarantees execute() runs exactly once even
 	// if Valid()/Signatures()/Err()/etc. are called concurrently from
@@ -484,6 +498,17 @@ func (b *VerifyBuilder) ExternalChecks(enable bool) *VerifyBuilder {
 // ExternalChecks is enabled. If not set, a default of 10 seconds is used.
 func (b *VerifyBuilder) HTTPTimeout(d time.Duration) *VerifyBuilder {
 	b.httpTimeout = d
+	return b
+}
+
+// Context bounds external OCSP/CRL requests made when ExternalChecks is
+// enabled: cancelling ctx aborts an in-flight request immediately, in
+// addition to whatever HTTPTimeout applies. Use this to tie verification to
+// a caller's own deadline or cancellation signal (e.g. an incoming HTTP
+// request's context, or os/signal.NotifyContext). If not set, requests run
+// under context.Background() and are bounded only by HTTPTimeout.
+func (b *VerifyBuilder) Context(ctx context.Context) *VerifyBuilder {
+	b.ctx = ctx
 	return b
 }
 

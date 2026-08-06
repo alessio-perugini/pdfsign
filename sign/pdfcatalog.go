@@ -2,6 +2,7 @@ package sign
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -42,7 +43,9 @@ func (context *SignContext) createCatalog() ([]byte, error) {
 	for _, key := range root.Keys() {
 		if key != "Type" && key != "AcroForm" {
 			_, _ = fmt.Fprintf(&catalog_buffer, "  /%s ", key)
-			context.serializeCatalogEntry(&catalog_buffer, rootPtr.GetID(), root.Key(key))
+			if err := context.serializeCatalogEntry(&catalog_buffer, rootPtr.GetID(), root.Key(key)); err != nil {
+				return nil, fmt.Errorf("failed to serialize catalog entry %q: %w", key, err)
+			}
 			catalog_buffer.WriteString("\n")
 		}
 	}
@@ -51,16 +54,29 @@ func (context *SignContext) createCatalog() ([]byte, error) {
 	catalog_buffer.WriteString("  /AcroForm <<\n")
 	catalog_buffer.WriteString("    /Fields [")
 
-	// Add existing signatures to the AcroForm dictionary
-	for i, sig := range context.existingSignatures {
-		if i > 0 {
-			catalog_buffer.WriteString(" ")
+	// Add existing fields to the AcroForm dictionary
+	fieldsAdded := 0
+	acroForm := root.Key("AcroForm")
+	if !acroForm.IsNull() {
+		fields := acroForm.Key("Fields")
+		if !fields.IsNull() && fields.Kind() == pdf.Array {
+			for i := 0; i < fields.Len(); i++ {
+				ptr := fields.Index(i).GetPtr()
+				// Skip direct objects (ID == 0 would emit invalid "0 0 R")
+				if ptr.GetID() == 0 {
+					continue
+				}
+				if fieldsAdded > 0 {
+					catalog_buffer.WriteString(" ")
+				}
+				catalog_buffer.WriteString(strconv.Itoa(int(ptr.GetID())) + " 0 R")
+				fieldsAdded++
+			}
 		}
-		catalog_buffer.WriteString(strconv.Itoa(int(sig.objectId)) + " 0 R")
 	}
 
 	// Add the visual signature field to the AcroForm dictionary
-	if len(context.existingSignatures) > 0 {
+	if fieldsAdded > 0 {
 		catalog_buffer.WriteString(" ")
 	}
 	catalog_buffer.WriteString(strconv.Itoa(int(context.VisualSignData.objectId)) + " 0 R")
@@ -116,11 +132,11 @@ func (context *SignContext) createCatalog() ([]byte, error) {
 }
 
 // serializeCatalogEntry takes a pdf.Value and serializes it to the given writer.
-func (context *SignContext) serializeCatalogEntry(w io.Writer, rootObjId uint32, value pdf.Value) {
-	if ptr := value.GetPtr(); ptr.GetID() != rootObjId {
+func (context *SignContext) serializeCatalogEntry(w io.Writer, rootObjId uint32, value pdf.Value) error {
+	if ptr := value.GetPtr(); ptr.GetID() > 0 && ptr.GetID() != rootObjId {
 		// Indirect object
 		_, _ = fmt.Fprintf(w, "%d %d R", ptr.GetID(), ptr.GetGen())
-		return
+		return nil
 	}
 
 	// Direct object
@@ -148,7 +164,9 @@ func (context *SignContext) serializeCatalogEntry(w io.Writer, rootObjId uint32,
 				_, _ = fmt.Fprint(w, " ") // Space between items
 			}
 			_, _ = fmt.Fprintf(w, "/%s ", key)
-			context.serializeCatalogEntry(w, rootObjId, value.Key(key))
+			if err := context.serializeCatalogEntry(w, rootObjId, value.Key(key)); err != nil {
+				return err
+			}
 		}
 		_, _ = fmt.Fprint(w, ">>")
 	case pdf.Array:
@@ -157,10 +175,13 @@ func (context *SignContext) serializeCatalogEntry(w io.Writer, rootObjId uint32,
 			if idx > 0 {
 				_, _ = fmt.Fprint(w, " ") // Space between items
 			}
-			context.serializeCatalogEntry(w, rootObjId, value.Index(idx))
+			if err := context.serializeCatalogEntry(w, rootObjId, value.Index(idx)); err != nil {
+				return err
+			}
 		}
 		_, _ = fmt.Fprint(w, "]")
 	case pdf.Stream:
-		panic("stream cannot be a direct object")
+		return errors.New("catalog entry: stream cannot be a direct object")
 	}
+	return nil
 }

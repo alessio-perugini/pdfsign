@@ -33,10 +33,10 @@ jobs:
           version: v2.7.0
 
           # golangci-lint's own released binaries are still built with an
-          # older Go toolchain than what a dependency in this module's build
-          # graph now requires, which golangci-lint refuses to run under.
-          # goinstall builds the binary from source with the Go toolchain
-          # actions/setup-go just installed above, avoiding the mismatch.
+          # older Go toolchain than this repo's `go 1.26.0` directive, which
+          # golangci-lint refuses to run under. goinstall builds the binary
+          # from source with the Go toolchain actions/setup-go just installed
+          # above, avoiding the mismatch.
           install-mode: goinstall
 
           # Optional: working directory, useful for monorepos

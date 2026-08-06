@@ -30,6 +30,15 @@ func createFontResource(buffer *bytes.Buffer) {
 	buffer.WriteString("       /BaseFont /Times-Roman\n")
 	buffer.WriteString("       /FirstChar 32\n") // Standard ASCII range start (space)
 	buffer.WriteString("       /LastChar 255\n") // Standard ASCII range end
+	buffer.WriteString("       /Widths [")
+	// Widths is required alongside FirstChar/LastChar (ISO 32000-1 Table
+	// 111). Conformant viewers substitute their own built-in AFM metrics
+	// for the standard 14 fonts regardless of this array's contents, so a
+	// flat fallback doesn't change how the text renders.
+	for i := 32; i <= 255; i++ {
+		buffer.WriteString(" 500")
+	}
+	buffer.WriteString(" ]\n")
 	buffer.WriteString("       /FontDescriptor <<\n")
 	buffer.WriteString("         /Type /FontDescriptor\n")
 	buffer.WriteString("         /FontName /Times-Roman\n")
@@ -210,15 +219,20 @@ func computeTextSizeAndPosition(text string, rectWidth, rectHeight float64) (flo
 	return fontSize, textX, textY
 }
 
-func drawText(buffer *bytes.Buffer, text string, fontSize float64, x, y float64) {
-	buffer.WriteString("q\n")                       // Save graphics state
-	buffer.WriteString("BT\n")                      // Begin text
-	fmt.Fprintf(buffer, "/F1 %.2f Tf\n", fontSize)  // Set font and size
-	fmt.Fprintf(buffer, "%.2f %.2f Td\n", x, y)     // Set text position
-	buffer.WriteString("0.2 0.2 0.6 rg\n")          // Set font color to ballpoint-like color (RGB)
-	fmt.Fprintf(buffer, "%s Tj\n", pdfString(text)) // Show text
-	buffer.WriteString("ET\n")                      // End text
-	buffer.WriteString("Q\n")                       // Restore graphics state
+func drawText(buffer *bytes.Buffer, text string, fontSize float64, x, y float64) error {
+	encoded, err := pdfString(text)
+	if err != nil {
+		return fmt.Errorf("failed to encode appearance text: %w", err)
+	}
+	buffer.WriteString("q\n")                      // Save graphics state
+	buffer.WriteString("BT\n")                     // Begin text
+	fmt.Fprintf(buffer, "/F1 %.2f Tf\n", fontSize) // Set font and size
+	fmt.Fprintf(buffer, "%.2f %.2f Td\n", x, y)    // Set text position
+	buffer.WriteString("0.2 0.2 0.6 rg\n")         // Set font color to ballpoint-like color (RGB)
+	fmt.Fprintf(buffer, "%s Tj\n", encoded)        // Show text
+	buffer.WriteString("ET\n")                     // End text
+	buffer.WriteString("Q\n")                      // Restore graphics state
+	return nil
 }
 
 func drawImage(buffer *bytes.Buffer, rectWidth, rectHeight float64) {
@@ -239,6 +253,10 @@ func (context *SignContext) createAppearance(rect [4]float64) ([]byte, error) {
 		return nil, fmt.Errorf("invalid rectangle dimensions: width %.2f and height %.2f must be greater than 0", rectWidth, rectHeight)
 	}
 
+	if context.SignData.Appearance.Renderer != nil {
+		return context.SignData.Appearance.Renderer(context, rect)
+	}
+
 	hasImage := len(context.SignData.Appearance.Image) > 0
 	shouldDisplayText := context.SignData.Appearance.ImageAsWatermark || !hasImage
 
@@ -256,14 +274,14 @@ func (context *SignContext) createAppearance(rect [4]float64) ([]byte, error) {
 			return nil, fmt.Errorf("failed to create image XObject: %w", err)
 		}
 
-		imageObjectId, err := context.addObject(imageBytes)
+		imageObjectId, err := context.AddObject(imageBytes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add image object: %w", err)
 		}
 
 		if maskObjectBytes != nil {
 			// Create and add the mask XObject
-			_, err := context.addObject(maskObjectBytes)
+			_, err := context.AddObject(maskObjectBytes)
 			if err != nil {
 				return nil, fmt.Errorf("failed to add mask object: %w", err)
 			}
@@ -288,7 +306,9 @@ func (context *SignContext) createAppearance(rect [4]float64) ([]byte, error) {
 	if shouldDisplayText {
 		text := context.SignData.Signature.Info.Name
 		fontSize, textX, textY := computeTextSizeAndPosition(text, rectWidth, rectHeight)
-		drawText(&appearance_stream_buffer, text, fontSize, textX, textY)
+		if err := drawText(&appearance_stream_buffer, text, fontSize, textX, textY); err != nil {
+			return nil, fmt.Errorf("failed to draw appearance text: %w", err)
+		}
 	}
 
 	writeFormTypeAndLength(&appearance_buffer, appearance_stream_buffer.Len())

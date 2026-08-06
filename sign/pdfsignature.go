@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/digitorus/pkcs7"
 	"github.com/digitorus/timestamp"
@@ -19,9 +20,13 @@ import (
 	cryptobyte_asn1 "golang.org/x/crypto/cryptobyte/asn1"
 )
 
+// defaultTSATimeout bounds a TSA request when SignData.Context carries no
+// deadline of its own, so an unresponsive TSA can't hang Sign() forever.
+const defaultTSATimeout = 30 * time.Second
+
 const signatureByteRangePlaceholder = "/ByteRange[0 ********** ********** **********]"
 
-func (context *SignContext) createSignaturePlaceholder() []byte {
+func (context *SignContext) createSignaturePlaceholder() ([]byte, error) {
 	// Using a buffer because it's way faster than concatenating.
 	var signature_buffer bytes.Buffer
 
@@ -116,23 +121,6 @@ func (context *SignContext) createSignaturePlaceholder() []byte {
 		signature_buffer.WriteString("     /V /1.2\n")
 	}
 
-	// (Required) A name identifying the algorithm that shall be used when computing the digest if not specified in the
-	// certificate. Valid values are MD5, SHA1 SHA256, SHA384, SHA512 and RIPEMD160
-	switch context.SignData.DigestAlgorithm {
-	case crypto.MD5:
-		signature_buffer.WriteString("   /DigestMethod /MD5\n")
-	case crypto.SHA1:
-		signature_buffer.WriteString("   /DigestMethod /SHA1\n")
-	case crypto.SHA256:
-		signature_buffer.WriteString("   /DigestMethod /SHA256\n")
-	case crypto.SHA384:
-		signature_buffer.WriteString("   /DigestMethod /SHA384\n")
-	case crypto.SHA512:
-		signature_buffer.WriteString("   /DigestMethod /SHA512\n")
-	case crypto.RIPEMD160:
-		signature_buffer.WriteString("   /DigestMethod /RIPEMD160\n")
-	}
-
 	switch context.SignData.Signature.CertType {
 	case CertificationSignature, UsageRightsSignature:
 		signature_buffer.WriteString("   >>\n") // close TransformParams
@@ -145,24 +133,57 @@ func (context *SignContext) createSignaturePlaceholder() []byte {
 		signature_buffer.WriteString(" >>\n")
 	}
 
+	// (Optional) A name identifying the algorithm that shall be used when computing the digest if not specified in the
+	// certificate. Valid values are MD5, SHA1 SHA256, SHA384, SHA512 and RIPEMD160
+	switch context.SignData.DigestAlgorithm {
+	case crypto.MD5:
+		signature_buffer.WriteString(" /DigestMethod /MD5\n")
+	case crypto.SHA1:
+		signature_buffer.WriteString(" /DigestMethod /SHA1\n")
+	case crypto.SHA256:
+		signature_buffer.WriteString(" /DigestMethod /SHA256\n")
+	case crypto.SHA384:
+		signature_buffer.WriteString(" /DigestMethod /SHA384\n")
+	case crypto.SHA512:
+		signature_buffer.WriteString(" /DigestMethod /SHA512\n")
+	case crypto.RIPEMD160:
+		signature_buffer.WriteString(" /DigestMethod /RIPEMD160\n")
+	}
+
 	if context.SignData.Signature.Info.Name != "" {
+		name, err := pdfString(context.SignData.Signature.Info.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode signer name: %w", err)
+		}
 		signature_buffer.WriteString(" /Name ")
-		signature_buffer.WriteString(pdfString(context.SignData.Signature.Info.Name))
+		signature_buffer.WriteString(name)
 		signature_buffer.WriteString("\n")
 	}
 	if context.SignData.Signature.Info.Location != "" {
+		location, err := pdfString(context.SignData.Signature.Info.Location)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode signer location: %w", err)
+		}
 		signature_buffer.WriteString(" /Location ")
-		signature_buffer.WriteString(pdfString(context.SignData.Signature.Info.Location))
+		signature_buffer.WriteString(location)
 		signature_buffer.WriteString("\n")
 	}
 	if context.SignData.Signature.Info.Reason != "" {
+		reason, err := pdfString(context.SignData.Signature.Info.Reason)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode signing reason: %w", err)
+		}
 		signature_buffer.WriteString(" /Reason ")
-		signature_buffer.WriteString(pdfString(context.SignData.Signature.Info.Reason))
+		signature_buffer.WriteString(reason)
 		signature_buffer.WriteString("\n")
 	}
 	if context.SignData.Signature.Info.ContactInfo != "" {
+		contactInfo, err := pdfString(context.SignData.Signature.Info.ContactInfo)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode signer contact info: %w", err)
+		}
 		signature_buffer.WriteString(" /ContactInfo ")
-		signature_buffer.WriteString(pdfString(context.SignData.Signature.Info.ContactInfo))
+		signature_buffer.WriteString(contactInfo)
 		signature_buffer.WriteString("\n")
 	}
 
@@ -177,14 +198,18 @@ func (context *SignContext) createSignaturePlaceholder() []byte {
 	// A timestamp can be embedded in a CMS binary data object (see 12.8.3.3, "CMS
 	// (PKCS #7) signatures").
 	if context.SignData.TSA.URL == "" && !context.SignData.Signature.Info.Date.IsZero() {
+		dateTime, err := pdfDateTime(context.SignData.Signature.Info.Date)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode signing date: %w", err)
+		}
 		signature_buffer.WriteString(" /M ")
-		signature_buffer.WriteString(pdfDateTime(context.SignData.Signature.Info.Date))
+		signature_buffer.WriteString(dateTime)
 		signature_buffer.WriteString("\n")
 	}
 
 	signature_buffer.WriteString(">>\n")
 
-	return signature_buffer.Bytes()
+	return signature_buffer.Bytes(), nil
 }
 
 func (context *SignContext) createTimestampPlaceholder() []byte {
@@ -210,9 +235,9 @@ func (context *SignContext) createTimestampPlaceholder() []byte {
 
 func (context *SignContext) fetchRevocationData() error {
 	if context.SignData.RevocationFunction != nil {
-		if context.SignData.CertificateChains != nil && (len(context.SignData.CertificateChains) > 0) {
+		if len(context.SignData.CertificateChains) > 0 {
 			certificate_chain := context.SignData.CertificateChains[0]
-			if certificate_chain != nil && (len(certificate_chain) > 0) {
+			if len(certificate_chain) > 0 {
 				for i, certificate := range certificate_chain {
 					if i < len(certificate_chain)-1 {
 						err := context.SignData.RevocationFunction(certificate, certificate_chain[i+1], &context.SignData.RevocationData)
@@ -249,13 +274,24 @@ func (context *SignContext) createSigningCertificateAttribute() (*pkcs7.Attribut
 	b.AddASN1(cryptobyte_asn1.SEQUENCE, func(b *cryptobyte.Builder) { // SigningCertificate
 		b.AddASN1(cryptobyte_asn1.SEQUENCE, func(b *cryptobyte.Builder) { // []ESSCertID, []ESSCertIDv2
 			b.AddASN1(cryptobyte_asn1.SEQUENCE, func(b *cryptobyte.Builder) { // ESSCertID, ESSCertIDv2
-				if context.SignData.DigestAlgorithm.HashFunc() != crypto.SHA1 &&
-					context.SignData.DigestAlgorithm.HashFunc() != crypto.SHA256 { // default SHA-256
+				// Explicitly include AlgorithmIdentifier for SHA256 (and others), but NOT for SHA1 (V1 structure)
+				if context.SignData.DigestAlgorithm.HashFunc() != crypto.SHA1 {
 					b.AddASN1(cryptobyte_asn1.SEQUENCE, func(b *cryptobyte.Builder) { // AlgorithmIdentifier
 						b.AddASN1ObjectIdentifier(getOIDFromHashAlgorithm(context.SignData.DigestAlgorithm))
 					})
 				}
 				b.AddASN1OctetString(hash.Sum(nil)) // certHash
+
+				// IssuerSerial
+				b.AddASN1(cryptobyte_asn1.SEQUENCE, func(b *cryptobyte.Builder) {
+					b.AddASN1(cryptobyte_asn1.SEQUENCE, func(b *cryptobyte.Builder) { // GeneralNames
+						// directoryName [4] Name
+						b.AddASN1(cryptobyte_asn1.Tag(4).Constructed().ContextSpecific(), func(b *cryptobyte.Builder) {
+							b.AddBytes(context.SignData.Certificate.RawIssuer)
+						})
+					})
+					b.AddASN1BigInt(context.SignData.Certificate.SerialNumber)
+				})
 			})
 		})
 	})
@@ -264,9 +300,10 @@ func (context *SignContext) createSigningCertificateAttribute() (*pkcs7.Attribut
 	if err != nil {
 		return nil, err
 	}
+
 	signingCertificate := pkcs7.Attribute{
 		Type:  asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 2, 47}, // SigningCertificateV2
-		Value: asn1.RawValue{FullBytes: sse},
+		Value: asn1.RawValue{FullBytes: sse},                             // Pass SEQUENCE bytes directly, pkcs7 wraps in SET
 	}
 	if context.SignData.DigestAlgorithm.HashFunc() == crypto.SHA1 {
 		signingCertificate.Type = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 2, 12} // SigningCertificate
@@ -325,14 +362,29 @@ func (context *SignContext) createSignature() ([]byte, error) {
 		return nil, fmt.Errorf("new signed data: %w", err)
 	}
 
+	var extraAttributes []pkcs7.Attribute
+
+	// Adobe Revocation Info (conditional)
+	if len(context.SignData.RevocationData.CRL) > 0 || len(context.SignData.RevocationData.OCSP) > 0 {
+		extraAttributes = append(extraAttributes, pkcs7.Attribute{
+			Type:  asn1.ObjectIdentifier{1, 2, 840, 113583, 1, 1, 8},
+			Value: context.SignData.RevocationData,
+		})
+	}
+
+	// Signing Certificate (required for AdES)
+	extraAttributes = append(extraAttributes, *signingCertificate)
+
+	// Append caller-supplied custom signed attributes after the library
+	// defaults. They ride inside the cryptographically protected
+	// SignedAttributes set per RFC 5652 §11.2; any tampering with their
+	// values breaks pkcs7.Verify. An empty slice preserves prior behavior.
+	if len(context.SignData.ExtraSignedAttributes) > 0 {
+		extraAttributes = append(extraAttributes, context.SignData.ExtraSignedAttributes...)
+	}
+
 	signer_config := pkcs7.SignerInfoConfig{
-		ExtraSignedAttributes: []pkcs7.Attribute{
-			{
-				Type:  asn1.ObjectIdentifier{1, 2, 840, 113583, 1, 1, 8},
-				Value: context.SignData.RevocationData,
-			},
-			*signingCertificate,
-		},
+		ExtraSignedAttributes: extraAttributes,
 	}
 
 	// Add the first certificate chain without our own certificate.
@@ -389,8 +441,10 @@ func (context *SignContext) GetTSA(sign_content []byte) (timestamp_response []by
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
+	ctx := ensureContext(context.SignData.Context)
+
 	ts_request_reader := bytes.NewReader(ts_request)
-	req, err := http.NewRequest("POST", context.SignData.TSA.URL, ts_request_reader)
+	req, err := http.NewRequestWithContext(ctx, "POST", context.SignData.TSA.URL, ts_request_reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare request (%s): %w", context.SignData.TSA.URL, err)
 	}
@@ -403,28 +457,22 @@ func (context *SignContext) GetTSA(sign_content []byte) (timestamp_response []by
 	}
 
 	client := &http.Client{}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		client.Timeout = defaultTSATimeout
+	}
 	resp, err := client.Do(req)
-	code := 0
-
-	if resp != nil {
-		code = resp.StatusCode
+	if err != nil {
+		return nil, fmt.Errorf("POST %s failed: %w", context.SignData.TSA.URL, err)
 	}
-
-	if err != nil || (code < 200 || code > 299) {
-		if err == nil {
-			defer func() {
-				_ = resp.Body.Close()
-			}()
-			body, _ := io.ReadAll(resp.Body)
-			return nil, errors.New("non success response (" + strconv.Itoa(code) + "): " + string(body))
-		}
-
-		return nil, errors.New("non success response (" + strconv.Itoa(code) + ")")
-	}
-
 	defer func() {
 		_ = resp.Body.Close()
 	}()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, errors.New("non success response (" + strconv.Itoa(resp.StatusCode) + "): " + string(body))
+	}
+
 	timestamp_response_body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
@@ -444,17 +492,26 @@ func (context *SignContext) replaceSignature() error {
 
 	if uint32(len(dst)) > context.SignatureMaxLength {
 		log.Println("Signature too long, retrying with increased buffer size.")
-		// set new base and try signing again
+		// set new base and return error to trigger retry in SignPDF loop
 		context.SignatureMaxLengthBase += (uint32(len(dst)) - context.SignatureMaxLength) + 1
-		return context.SignPDF()
+		return errSignatureTooLong
+	}
+
+	// Pad signature with zeros to match SignatureMaxLength
+	if uint32(len(dst)) < context.SignatureMaxLength {
+		dst = append(dst, bytes.Repeat([]byte("0"), int(context.SignatureMaxLength)-len(dst))...)
 	}
 
 	if _, err := context.OutputBuffer.Seek(0, 0); err != nil {
 		return err
 	}
-	file_content := context.OutputBuffer.Buff.Bytes()
+	// Important: capture the bytes before we Reset the buffer
+	original_bytes := context.OutputBuffer.Buff.Bytes()
+	file_content := make([]byte, len(original_bytes))
+	copy(file_content, original_bytes)
 
 	// Write the file content up to the signature
+	context.OutputBuffer.Buff.Reset()
 	if _, err := context.OutputBuffer.Write(file_content[context.ByteRangeValues[0]:context.ByteRangeValues[1]]); err != nil {
 		return err
 	}
@@ -464,13 +521,7 @@ func (context *SignContext) replaceSignature() error {
 		return err
 	}
 
-	if _, err := context.OutputBuffer.Write([]byte(dst)); err != nil {
-		return err
-	}
-
-	// Write 0s to ensure the signature remains the same size
-	zeroPadding := bytes.Repeat([]byte("0"), int(context.SignatureMaxLength)-len(dst))
-	if _, err := context.OutputBuffer.Write(zeroPadding); err != nil {
+	if _, err := context.OutputBuffer.Write(dst); err != nil {
 		return err
 	}
 

@@ -2,6 +2,7 @@ package verify
 
 import (
 	"crypto/x509"
+	"encoding/asn1"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ func TestValidateKeyUsage(t *testing.T) {
 		name        string
 		keyUsage    x509.KeyUsage
 		extKeyUsage []x509.ExtKeyUsage
+		unknownEKU  bool // set the Document Signing OID via UnknownExtKeyUsage, as Go's x509 parser actually does
 		options     *VerifyOptions
 		expectKU    bool
 		expectEKU   bool
@@ -22,7 +24,7 @@ func TestValidateKeyUsage(t *testing.T) {
 		{
 			name:        "Valid document signing certificate",
 			keyUsage:    x509.KeyUsageDigitalSignature,
-			extKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsage(36)}, // Document Signing EKU
+			extKeyUsage: nil, unknownEKU: true, // Document Signing EKU (parses into UnknownExtKeyUsage, not ExtKeyUsage)
 			options:     DefaultVerifyOptions(),
 			expectKU:    true,
 			expectEKU:   true,
@@ -30,7 +32,7 @@ func TestValidateKeyUsage(t *testing.T) {
 		{
 			name:        "Valid with non-repudiation",
 			keyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageContentCommitment,
-			extKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsage(36)}, // Document Signing EKU
+			extKeyUsage: nil, unknownEKU: true, // Document Signing EKU (parses into UnknownExtKeyUsage, not ExtKeyUsage)
 			options:     DefaultVerifyOptions(),
 			expectKU:    true,
 			expectEKU:   true,
@@ -56,7 +58,7 @@ func TestValidateKeyUsage(t *testing.T) {
 		{
 			name:        "Missing digital signature KU",
 			keyUsage:    x509.KeyUsageKeyEncipherment,
-			extKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsage(36)}, // Document Signing EKU
+			extKeyUsage: nil, unknownEKU: true, // Document Signing EKU (parses into UnknownExtKeyUsage, not ExtKeyUsage)
 			options:     DefaultVerifyOptions(),
 			expectKU:    false,
 			expectEKU:   true,
@@ -92,9 +94,9 @@ func TestValidateKeyUsage(t *testing.T) {
 		{
 			name:        "Required non-repudiation - present",
 			keyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageContentCommitment,
-			extKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsage(36)}, // Document Signing EKU
+			extKeyUsage: nil, unknownEKU: true, // Document Signing EKU (parses into UnknownExtKeyUsage, not ExtKeyUsage)
 			options: &VerifyOptions{
-				RequiredEKUs:              []x509.ExtKeyUsage{x509.ExtKeyUsage(36)},
+				RequiredEKUs:              []x509.ExtKeyUsage{documentSigningEKU},
 				AllowedEKUs:               []x509.ExtKeyUsage{},
 				RequireDigitalSignatureKU: true,
 				RequireNonRepudiation:     true,
@@ -105,9 +107,9 @@ func TestValidateKeyUsage(t *testing.T) {
 		{
 			name:        "Required non-repudiation - missing",
 			keyUsage:    x509.KeyUsageDigitalSignature,            // Missing ContentCommitment
-			extKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsage(36)}, // Document Signing EKU
+			extKeyUsage: nil, unknownEKU: true, // Document Signing EKU (parses into UnknownExtKeyUsage, not ExtKeyUsage)
 			options: &VerifyOptions{
-				RequiredEKUs:              []x509.ExtKeyUsage{x509.ExtKeyUsage(36)},
+				RequiredEKUs:              []x509.ExtKeyUsage{documentSigningEKU},
 				AllowedEKUs:               []x509.ExtKeyUsage{},
 				RequireDigitalSignatureKU: true,
 				RequireNonRepudiation:     true,
@@ -119,9 +121,9 @@ func TestValidateKeyUsage(t *testing.T) {
 		{
 			name:        "Both digital signature and non-repudiation missing",
 			keyUsage:    x509.KeyUsageKeyEncipherment,             // Missing both
-			extKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsage(36)}, // Document Signing EKU
+			extKeyUsage: nil, unknownEKU: true, // Document Signing EKU (parses into UnknownExtKeyUsage, not ExtKeyUsage)
 			options: &VerifyOptions{
-				RequiredEKUs:              []x509.ExtKeyUsage{x509.ExtKeyUsage(36)},
+				RequiredEKUs:              []x509.ExtKeyUsage{documentSigningEKU},
 				AllowedEKUs:               []x509.ExtKeyUsage{},
 				RequireDigitalSignatureKU: true,
 				RequireNonRepudiation:     true,
@@ -138,6 +140,9 @@ func TestValidateKeyUsage(t *testing.T) {
 			cert := &x509.Certificate{
 				KeyUsage:    tt.keyUsage,
 				ExtKeyUsage: tt.extKeyUsage,
+			}
+			if tt.unknownEKU {
+				cert.UnknownExtKeyUsage = []asn1.ObjectIdentifier{documentSigningEKUOID}
 			}
 
 			kuValid, kuError, ekuValid, ekuError := validateKeyUsage(cert, tt.options)
@@ -170,6 +175,7 @@ func TestDefaultVerifyOptions(t *testing.T) {
 
 	if options == nil {
 		t.Fatal("DefaultVerifyOptions returned nil")
+		return // unreachable, but satisfies staticcheck
 	}
 
 	if !options.RequireDigitalSignatureKU {
@@ -318,7 +324,7 @@ func TestTimestampVerificationOptions(t *testing.T) {
 			}
 
 			// Mock signer with or without timestamp
-			signer := &Signer{}
+			signer := NewSigner()
 			if tt.hasTimestamp {
 				// Mock timestamp - we can't easily create a real one here
 				// In a real test, you'd need to create a proper timestamp.Timestamp
@@ -363,7 +369,7 @@ func TestEmbeddedCertificatesSecurityOption(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			options := &VerifyOptions{
-				RequiredEKUs:              []x509.ExtKeyUsage{x509.ExtKeyUsage(36)},
+				RequiredEKUs:              []x509.ExtKeyUsage{documentSigningEKU},
 				RequireDigitalSignatureKU: true,
 				AllowUntrustedRoots:       tt.allowUntrustedRoots,
 			}

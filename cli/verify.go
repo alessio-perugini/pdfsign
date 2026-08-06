@@ -1,14 +1,16 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"time"
 
-	"github.com/digitorus/pdfsign/verify"
+	"github.com/digitorus/pdfsign"
 )
 
 func VerifyCommand() {
@@ -57,32 +59,41 @@ func VerifyCommand() {
 
 func VerifyPDF(input string, enableExternalRevocation, requireDigitalSignatureKU, requireNonRepudiation,
 	trustSignatureTime, validateTimestampCertificates, allowUntrustedRoots bool, httpTimeout time.Duration) {
-	inputFile, err := os.Open(input)
+	doc, err := pdfsign.OpenFile(input)
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		osExit(1)
 	}
-	defer func() {
-		if err := inputFile.Close(); err != nil {
-			log.Printf("Warning: failed to close input file: %v", err)
-		}
-	}()
 
-	options := verify.DefaultVerifyOptions()
-	options.EnableExternalRevocationCheck = enableExternalRevocation
-	options.RequireDigitalSignatureKU = requireDigitalSignatureKU
-	options.RequireNonRepudiation = requireNonRepudiation
-	options.TrustSignatureTime = trustSignatureTime
-	options.ValidateTimestampCertificates = validateTimestampCertificates
-	options.AllowUntrustedRoots = allowUntrustedRoots
-	options.HTTPTimeout = httpTimeout
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 
-	resp, err := verify.VerifyFileWithOptions(inputFile, options)
-	if err != nil {
+	result := doc.Verify().
+		ExternalChecks(enableExternalRevocation).
+		RequireDigitalSignature(requireDigitalSignatureKU).
+		RequireNonRepudiation(requireNonRepudiation).
+		TrustSignatureTime(trustSignatureTime).
+		ValidateTimestampCertificates(validateTimestampCertificates).
+		TrustSelfSigned(allowUntrustedRoots).
+		HTTPTimeout(httpTimeout).
+		Context(ctx)
+
+	if err := result.Err(); err != nil {
 		fmt.Println(err)
 		osExit(1)
 	}
 
-	jsonData, err := json.Marshal(resp)
+	output := struct {
+		Document pdfsign.DocumentInfo            `json:"document_info"`
+		Signers  []pdfsign.SignatureVerifyResult `json:"signers"`
+		Valid    bool                            `json:"valid"`
+	}{
+		Document: result.Document(),
+		Signers:  result.Signatures(),
+		Valid:    result.Valid(),
+	}
+
+	jsonData, err := json.Marshal(output)
 	if err != nil {
 		fmt.Println(err)
 		osExit(1)

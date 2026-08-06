@@ -1,7 +1,9 @@
 package verify
 
 import (
+	"bytes"
 	"crypto/x509"
+	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -154,7 +156,7 @@ func TestPerformExternalOCSPCheck(t *testing.T) {
 				}
 			}
 
-			_, err := performExternalOCSPCheckWithFunc(testCert, issuer, options, ocspRequestFunc)
+			_, _, err := performExternalOCSPCheckWithFunc(testCert, issuer, options, ocspRequestFunc)
 
 			if tt.expectError {
 				if err == nil {
@@ -320,7 +322,7 @@ func TestPerformExternalCRLCheck(t *testing.T) {
 			options := tt.setupOptions(serverURL)
 			testCert := tt.setupCert(serverURL)
 
-			revocationTime, isRevoked, err := performExternalCRLCheck(testCert, options)
+			revocationTime, isRevoked, _, err := performExternalCRLCheck(testCert, options)
 
 			if tt.expectError {
 				if err == nil {
@@ -359,4 +361,99 @@ func containsStringHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// panicReader fails the test if anything ever reads from it - used to prove
+// readLimitedBody's Content-Length fast path rejects an oversized response
+// without touching the body at all.
+type panicReader struct{}
+
+func (panicReader) Read([]byte) (int, error) {
+	panic("body should not have been read")
+}
+
+func TestReadLimitedBody(t *testing.T) {
+	t.Run("declared Content-Length over limit is rejected without reading the body", func(t *testing.T) {
+		resp := &http.Response{
+			ContentLength: 1000,
+			Body:          io.NopCloser(panicReader{}),
+		}
+		if _, err := readLimitedBody(resp, 100); err == nil {
+			t.Fatal("expected error for a declared Content-Length exceeding the limit")
+		}
+	})
+
+	t.Run("streamed body exceeding the limit without a Content-Length is rejected", func(t *testing.T) {
+		resp := &http.Response{
+			ContentLength: -1, // unknown, as with chunked transfer-encoding
+			Body:          io.NopCloser(bytes.NewReader(bytes.Repeat([]byte("A"), 1000))),
+		}
+		if _, err := readLimitedBody(resp, 100); err == nil {
+			t.Fatal("expected error for a streamed body exceeding the limit")
+		}
+	})
+
+	t.Run("body within the limit is read fully", func(t *testing.T) {
+		want := []byte("hello world")
+		resp := &http.Response{
+			ContentLength: int64(len(want)),
+			Body:          io.NopCloser(bytes.NewReader(want)),
+		}
+		got, err := readLimitedBody(resp, 100)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+}
+
+func TestWarnIfUnexpectedContentType(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		expected    string
+		wantWarning bool
+	}{
+		{"exact match", "application/pkix-crl", "application/pkix-crl", false},
+		{"match with parameter", "application/ocsp-response; charset=binary", "application/ocsp-response", false},
+		{"case-insensitive match", "Application/Pkix-CRL", "application/pkix-crl", false},
+		{"mismatch", "text/html", "application/pkix-crl", true},
+		{"missing header - no warning (real-world responders often omit it)", "", "application/pkix-crl", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := &http.Response{Header: http.Header{}}
+			if tt.contentType != "" {
+				resp.Header.Set("Content-Type", tt.contentType)
+			}
+			got := warnIfUnexpectedContentType(resp, tt.expected, "RFC X")
+			if (got != "") != tt.wantWarning {
+				t.Errorf("warnIfUnexpectedContentType() = %q, wantWarning=%v", got, tt.wantWarning)
+			}
+		})
+	}
+}
+
+// TestPerformExternalCRLCheck_OversizedResponseRejected proves an oversized
+// CRL response is rejected rather than fully buffered into memory.
+func TestPerformExternalCRLCheck_OversizedResponseRejected(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bytes.Repeat([]byte{0x30}, maxCRLResponseBytes+1))
+	}))
+	defer server.Close()
+
+	cert := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		CRLDistributionPoints: []string{server.URL},
+	}
+	options := &VerifyOptions{EnableExternalRevocationCheck: true}
+
+	_, _, _, err := performExternalCRLCheck(cert, options)
+	if err == nil {
+		t.Fatal("expected an error for a CRL response exceeding the size limit")
+	}
+	t.Logf("got expected error: %v", err)
 }

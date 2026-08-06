@@ -306,9 +306,12 @@ func applyRevocationStatus(
 	if options.EnableExternalRevocationCheck {
 		if !options.SkipOCSP && !c.OCSPEmbedded && len(cert.OCSPServer) > 0 && len(chain) > 0 && len(chain[0]) > 1 {
 			issuer := chain[0][1]
-			if extResp, err := performExternalOCSPCheck(cert, issuer, options); err == nil {
+			if extResp, warning, err := performExternalOCSPCheck(cert, issuer, options); err == nil {
 				c.OCSPResponse = extResp
 				c.OCSPExternal = true
+				if warning != "" {
+					signer.TimeWarnings = append(signer.TimeWarnings, warning)
+				}
 				if extResp.Status != ocsp.Good {
 					c.RevocationTime = &extResp.RevokedAt
 					if err := applyRevocationImpact(signer, c, extResp.RevokedAt); err != nil && valErr == nil {
@@ -319,8 +322,11 @@ func applyRevocationStatus(
 		}
 
 		if !options.SkipCRL && !c.CRLEmbedded && len(cert.CRLDistributionPoints) > 0 {
-			if revocationTime, isRevoked, err := performExternalCRLCheck(cert, options); err == nil {
+			if revocationTime, isRevoked, warning, err := performExternalCRLCheck(cert, options); err == nil {
 				c.CRLExternal = true
+				if warning != "" {
+					signer.TimeWarnings = append(signer.TimeWarnings, warning)
+				}
 				if isRevoked {
 					c.RevocationTime = revocationTime
 					if err := applyRevocationImpact(signer, c, *revocationTime); err != nil && valErr == nil {

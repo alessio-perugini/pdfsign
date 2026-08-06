@@ -174,7 +174,7 @@ func TestPerformExternalOCSPCheck_ErrorPaths(t *testing.T) {
 			}
 
 			// Execute
-			_, err := performExternalOCSPCheckWithFunc(currentCert, issuer, tt.options, tt.ocspFunc)
+			_, _, err := performExternalOCSPCheckWithFunc(currentCert, issuer, tt.options, tt.ocspFunc)
 
 			if tt.expectError {
 				if err == nil {
@@ -270,7 +270,7 @@ func TestPerformExternalCRLCheck_ErrorPaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, err := performExternalCRLCheck(cert, tt.options)
+			_, _, _, err := performExternalCRLCheck(cert, tt.options)
 			if tt.expectError {
 				if err == nil {
 					t.Error("Expected error but got nil")
@@ -304,7 +304,7 @@ func contains(s, substr string) bool {
 func TestPerformExternalOCSPCheck_Wrapper(t *testing.T) {
 	// Just hit the wrapper to ensure it calls the internal function
 	// We expect error because default options have external check disabled (or we set it)
-	_, err := performExternalOCSPCheck(nil, nil, DefaultVerifyOptions())
+	_, _, err := performExternalOCSPCheck(nil, nil, DefaultVerifyOptions())
 	if err == nil {
 		t.Error("Expected error from wrapper when check is disabled")
 	}

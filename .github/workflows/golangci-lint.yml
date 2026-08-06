@@ -22,7 +22,7 @@ jobs:
       - name: Set up Go 1.x
         uses: actions/setup-go@v5
         with:
-          go-version: ^1.23
+          go-version: ^1.26
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
@@ -30,7 +30,14 @@ jobs:
           # Require: The version of golangci-lint to use.
           # When `install-mode` is `binary` (default) the value can be v1.2 or v1.2.3 or `latest` to use the latest version.
           # When `install-mode` is `goinstall` the value can be v1.2.3, `latest`, or the hash of a commit.
-          version: v2.7
+          version: v2.7.0
+
+          # golangci-lint's own released binaries are still built with an
+          # older Go toolchain than what a dependency in this module's build
+          # graph now requires, which golangci-lint refuses to run under.
+          # goinstall builds the binary from source with the Go toolchain
+          # actions/setup-go just installed above, avoiding the mismatch.
+          install-mode: goinstall
 
           # Optional: working directory, useful for monorepos
           # working-directory: somedir

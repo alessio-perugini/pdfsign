@@ -155,7 +155,7 @@ func stripEKUForChainTrust(cert *x509.Certificate) *x509.Certificate {
 // the chosen time, or nil if x509 should use the current wall-clock time.
 func resolveVerificationTime(signer *Signer, options *VerifyOptions) *time.Time {
 	signer.TimeSource = "current_time"
-	signer.TimeWarnings = []string{}
+	signer.Warnings = []error{}
 	signer.TimestampStatus = "missing"
 	signer.TimestampTrusted = false
 
@@ -171,16 +171,17 @@ func resolveVerificationTime(signer *Signer, options *VerifyOptions) *time.Time 
 		if options.ValidateTimestampCertificates {
 			trusted, warning := validateTimestampCertificate(signer.TimeStamp, options)
 			signer.TimestampTrusted = trusted
-			if warning != "" {
-				signer.TimeWarnings = append(signer.TimeWarnings, warning)
+			if warning != nil {
+				signer.Warnings = append(signer.Warnings, warning)
 			}
 		}
 
 	case options.TrustSignatureTime && signer.SignatureTime != nil:
 		verificationTime = signer.SignatureTime
 		signer.TimeSource = "signature_time"
-		signer.TimeWarnings = append(signer.TimeWarnings,
-			"Using signature time as fallback - this time is provided by the signatory and should be considered untrusted")
+		signer.Warnings = append(signer.Warnings, &Warning{
+			Msg: "Using signature time as fallback - this time is provided by the signatory and should be considered untrusted",
+		})
 
 	case !options.AtTime.IsZero():
 		t := options.AtTime
@@ -309,8 +310,8 @@ func applyRevocationStatus(
 			if extResp, warning, err := performExternalOCSPCheck(cert, issuer, options); err == nil {
 				c.OCSPResponse = extResp
 				c.OCSPExternal = true
-				if warning != "" {
-					signer.TimeWarnings = append(signer.TimeWarnings, warning)
+				if warning != nil {
+					signer.Warnings = append(signer.Warnings, warning)
 				}
 				if extResp.Status != ocsp.Good {
 					c.RevocationTime = &extResp.RevokedAt
@@ -324,8 +325,8 @@ func applyRevocationStatus(
 		if !options.SkipCRL && !c.CRLEmbedded && len(cert.CRLDistributionPoints) > 0 {
 			if revocationTime, isRevoked, warning, err := performExternalCRLCheck(cert, options); err == nil {
 				c.CRLExternal = true
-				if warning != "" {
-					signer.TimeWarnings = append(signer.TimeWarnings, warning)
+				if warning != nil {
+					signer.Warnings = append(signer.Warnings, warning)
 				}
 				if isRevoked {
 					c.RevocationTime = revocationTime
@@ -359,15 +360,17 @@ func applyRevocationImpact(signer *Signer, c *Certificate, revocationTime time.T
 	}
 
 	if signer.TimeSource == "embedded_timestamp" {
-		signer.TimeWarnings = append(signer.TimeWarnings,
-			fmt.Sprintf("Certificate was revoked after signing time (revoked: %v, signed: %v)",
-				revocationTime, signer.VerificationTime))
+		signer.Warnings = append(signer.Warnings, &Warning{
+			Msg: fmt.Sprintf("Certificate was revoked after signing time (revoked: %v, signed: %v)",
+				revocationTime, signer.VerificationTime),
+		})
 		return nil
 	}
 
 	signer.RevokedCertificate = true
-	signer.TimeWarnings = append(signer.TimeWarnings,
-		"Certificate revoked, but cannot determine if revocation occurred before or after signing without trusted timestamp")
+	signer.Warnings = append(signer.Warnings, &Warning{
+		Msg: "Certificate revoked, but cannot determine if revocation occurred before or after signing without trusted timestamp",
+	})
 	return &RevocationError{Msg: "certificate is revoked and revocation time relative to signing could not be determined"}
 }
 
@@ -419,15 +422,15 @@ func buildRevocationWarning(cert *x509.Certificate, c *Certificate, options *Ver
 }
 
 // validateTimestampCertificate validates the timestamp token's signing certificate
-func validateTimestampCertificate(ts *timestamp.Timestamp, options *VerifyOptions) (bool, string) {
+func validateTimestampCertificate(ts *timestamp.Timestamp, options *VerifyOptions) (bool, error) {
 	if ts == nil {
-		return false, "No timestamp to validate"
+		return false, &Warning{Msg: "No timestamp to validate"}
 	}
 
 	// Parse the timestamp token to get the PKCS7 structure
 	p7, err := pkcs7.Parse(ts.RawToken)
 	if err != nil {
-		return false, fmt.Sprintf("Failed to parse timestamp token: %v", err)
+		return false, &Warning{Msg: fmt.Sprintf("Failed to parse timestamp token: %v", err)}
 	}
 
 	// Create certificate pool from timestamp certificates
@@ -448,7 +451,7 @@ func validateTimestampCertificate(ts *timestamp.Timestamp, options *VerifyOption
 	}
 
 	if timestampCert == nil {
-		return false, "No timestamp signing certificate found"
+		return false, &Warning{Msg: "No timestamp signing certificate found"}
 	}
 
 	// Verify the timestamp certificate chain against system trusted roots
@@ -466,14 +469,14 @@ func validateTimestampCertificate(ts *timestamp.Timestamp, options *VerifyOption
 			opts.Roots = certPool
 			_, err = timestampCert.Verify(opts)
 			if err != nil {
-				return false, fmt.Sprintf("Timestamp certificate chain validation failed: %v", err)
+				return false, &Warning{Msg: fmt.Sprintf("Timestamp certificate chain validation failed: %v", err)}
 			}
-			return true, "Timestamp certificate validated using embedded certificates (not system trusted)"
+			return true, &Warning{Msg: "Timestamp certificate validated using embedded certificates (not system trusted)"}
 		}
-		return false, fmt.Sprintf("Timestamp certificate chain validation failed: %v", err)
+		return false, &Warning{Msg: fmt.Sprintf("Timestamp certificate chain validation failed: %v", err)}
 	}
 
-	return true, ""
+	return true, nil
 }
 
 // IsRevokedBeforeSigning determines if a certificate was revoked before the signing time

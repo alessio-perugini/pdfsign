@@ -14,38 +14,25 @@ import (
 	"golang.org/x/crypto/ocsp"
 )
 
-const (
-	// maxOCSPResponseBytes bounds how much of an OCSP response body is
-	// buffered into memory. Real responses are a few KB; this is generous
-	// while still bounding memory use against a malicious or misbehaving
-	// responder streaming an unbounded body.
-	maxOCSPResponseBytes = 1 << 20 // 1 MiB
-
-	// maxCRLResponseBytes bounds how much of a CRL response body is
-	// buffered into memory. Large enterprise CRLs can run into the tens of
-	// MB; this is generous while still bounding memory use.
-	maxCRLResponseBytes = 64 << 20 // 64 MiB
-)
-
 // OCSPRequestFunc allows mocking OCSP request creation for tests
 type OCSPRequestFunc func(cert, issuer *x509.Certificate) ([]byte, error)
 
 // performExternalOCSPCheck performs an external OCSP check for the given certificate
-func performExternalOCSPCheck(cert, issuer *x509.Certificate, options *VerifyOptions) (*ocsp.Response, string, error) {
+func performExternalOCSPCheck(cert, issuer *x509.Certificate, options *VerifyOptions) (*ocsp.Response, error, error) {
 	return performExternalOCSPCheckWithFunc(cert, issuer, options, nil)
 }
 
 // performExternalOCSPCheckWithFunc allows injecting a custom OCSP request function for testing.
-// The returned string is a non-fatal warning (e.g. an unexpected response
-// Content-Type) to surface to the caller; it is empty when there's nothing
-// to warn about.
-func performExternalOCSPCheckWithFunc(cert, issuer *x509.Certificate, options *VerifyOptions, ocspRequestFunc OCSPRequestFunc) (*ocsp.Response, string, error) {
+// Returns (response, warning, err): warning is a non-fatal condition (e.g.
+// an unexpected response Content-Type) to surface to the caller, nil when
+// there's nothing to warn about.
+func performExternalOCSPCheckWithFunc(cert, issuer *x509.Certificate, options *VerifyOptions, ocspRequestFunc OCSPRequestFunc) (*ocsp.Response, error, error) {
 	if !options.EnableExternalRevocationCheck {
-		return nil, "", fmt.Errorf("external revocation checking is disabled")
+		return nil, nil, fmt.Errorf("external revocation checking is disabled")
 	}
 
 	if len(cert.OCSPServer) == 0 {
-		return nil, "", fmt.Errorf("certificate has no OCSP server URLs")
+		return nil, nil, fmt.Errorf("certificate has no OCSP server URLs")
 	}
 
 	// Create OCSP request (use injected func if provided)
@@ -57,7 +44,7 @@ func performExternalOCSPCheckWithFunc(cert, issuer *x509.Certificate, options *V
 		ocspReq, err = ocsp.CreateRequest(cert, issuer, nil)
 	}
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to create OCSP request: %v", err)
+		return nil, nil, fmt.Errorf("failed to create OCSP request: %v", err)
 	}
 
 	// Get HTTP client with timeout
@@ -68,6 +55,11 @@ func performExternalOCSPCheckWithFunc(cert, issuer *x509.Certificate, options *V
 			timeout = 10 * time.Second
 		}
 		client = &http.Client{Timeout: timeout}
+	}
+
+	maxBytes := options.MaxOCSPResponseBytes
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxOCSPResponseBytes
 	}
 
 	// Try each OCSP server URL
@@ -101,9 +93,9 @@ func performExternalOCSPCheckWithFunc(cert, issuer *x509.Certificate, options *V
 			continue
 		}
 
-		warning := warnIfUnexpectedContentType(resp, "application/ocsp-response", "RFC 6960 SS4.2.1")
+		warning := checkContentType(resp, serverURL, "application/ocsp-response", "RFC 6960 SS4.2.1")
 
-		body, err := readLimitedBody(resp, maxOCSPResponseBytes)
+		body, err := readLimitedBody(resp, maxBytes)
 		if err != nil {
 			lastErr = fmt.Errorf("failed to read OCSP response from %s: %v", serverURL, err)
 			continue
@@ -119,20 +111,20 @@ func performExternalOCSPCheckWithFunc(cert, issuer *x509.Certificate, options *V
 		return ocspResp, warning, nil
 	}
 
-	return nil, "", lastErr
+	return nil, nil, lastErr
 }
 
 // performExternalCRLCheck performs an external CRL check for the given certificate.
 // Returns (revocationTime, isRevoked, warning, error); warning is a
-// non-fatal message (e.g. an unexpected response Content-Type), empty when
-// there's nothing to warn about.
-func performExternalCRLCheck(cert *x509.Certificate, options *VerifyOptions) (*time.Time, bool, string, error) {
+// non-fatal condition (e.g. an unexpected response Content-Type) to
+// surface to the caller, nil when there's nothing to warn about.
+func performExternalCRLCheck(cert *x509.Certificate, options *VerifyOptions) (*time.Time, bool, error, error) {
 	if !options.EnableExternalRevocationCheck {
-		return nil, false, "", fmt.Errorf("external revocation checking is disabled")
+		return nil, false, nil, fmt.Errorf("external revocation checking is disabled")
 	}
 
 	if len(cert.CRLDistributionPoints) == 0 {
-		return nil, false, "", fmt.Errorf("certificate has no CRL distribution points")
+		return nil, false, nil, fmt.Errorf("certificate has no CRL distribution points")
 	}
 
 	// Get HTTP client with timeout
@@ -143,6 +135,11 @@ func performExternalCRLCheck(cert *x509.Certificate, options *VerifyOptions) (*t
 			timeout = 10 * time.Second
 		}
 		client = &http.Client{Timeout: timeout}
+	}
+
+	maxBytes := options.MaxCRLResponseBytes
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxCRLResponseBytes
 	}
 
 	// Try each CRL distribution point
@@ -182,9 +179,9 @@ func performExternalCRLCheck(cert *x509.Certificate, options *VerifyOptions) (*t
 			continue
 		}
 
-		warning := warnIfUnexpectedContentType(resp, "application/pkix-crl", "RFC 2585 SS4.2")
+		warning := checkContentType(resp, crlURL, "application/pkix-crl", "RFC 2585 SS4.2")
 
-		body, err := readLimitedBody(resp, maxCRLResponseBytes)
+		body, err := readLimitedBody(resp, maxBytes)
 		if err != nil {
 			lastErr = fmt.Errorf("failed to read CRL from %s: %v", crlURL, err)
 			continue
@@ -207,7 +204,7 @@ func performExternalCRLCheck(cert *x509.Certificate, options *VerifyOptions) (*t
 		return nil, false, warning, nil
 	}
 
-	return nil, false, "", lastErr
+	return nil, false, nil, lastErr
 }
 
 // readLimitedBody reads resp.Body, refusing to buffer more than maxBytes.
@@ -230,25 +227,25 @@ func readLimitedBody(resp *http.Response, maxBytes int64) ([]byte, error) {
 	return body, nil
 }
 
-// warnIfUnexpectedContentType returns a human-readable, non-fatal warning
-// when resp's Content-Type doesn't match expected (compared ignoring
-// parameters such as ";charset=..."), or "" when it matches or the header
-// is absent entirely. This never blocks processing the response - many
-// real-world responders, especially internal/enterprise CAs, are wrong or
+// checkContentType returns a *ContentTypeWarning when resp's Content-Type
+// doesn't match expected (compared ignoring parameters such as
+// ";charset=..."), or nil when it matches or the header is absent
+// entirely. This never blocks processing the response - many real-world
+// responders, especially internal/enterprise CAs, are wrong or
 // inconsistent about this header - it only surfaces a compliance note.
-func warnIfUnexpectedContentType(resp *http.Response, expected, rfc string) string {
+func checkContentType(resp *http.Response, url, expected, rfc string) error {
 	ct := resp.Header.Get("Content-Type")
 	if ct == "" {
-		return ""
+		return nil
 	}
 	base, _, err := mime.ParseMediaType(ct)
 	if err != nil {
 		base = ct
 	}
 	if strings.EqualFold(base, expected) {
-		return ""
+		return nil
 	}
-	return fmt.Sprintf("response Content-Type was %q, expected %q per %s", ct, expected, rfc)
+	return &ContentTypeWarning{URL: url, Got: ct, Expected: expected, RFC: rfc}
 }
 
 // decodeCRLBody returns the DER-encoded CRL bytes from body. Most CRL

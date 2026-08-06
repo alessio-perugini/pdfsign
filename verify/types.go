@@ -12,6 +12,21 @@ import (
 	"golang.org/x/crypto/ocsp"
 )
 
+const (
+	// DefaultMaxOCSPResponseBytes is the default value of
+	// VerifyOptions.MaxOCSPResponseBytes when unset. Classical (RSA/ECDSA)
+	// OCSP responses are a few KB; post-quantum signature algorithms (e.g.
+	// ML-DSA, SLH-DSA) produce substantially larger signatures and
+	// certificates, so this leaves generous headroom for both.
+	DefaultMaxOCSPResponseBytes int64 = 4 << 20 // 4 MiB
+
+	// DefaultMaxCRLResponseBytes is the default value of
+	// VerifyOptions.MaxCRLResponseBytes when unset. Large enterprise CRLs
+	// with many entries, or ones signed with a post-quantum algorithm, can
+	// run well into the tens of MB; this leaves generous headroom.
+	DefaultMaxCRLResponseBytes int64 = 256 << 20 // 256 MiB
+)
+
 // VerifyOptions contains options for PDF signature verification
 type VerifyOptions struct {
 	// RequiredEKUs specifies the Extended Key Usages that must be present
@@ -78,6 +93,18 @@ type VerifyOptions struct {
 	// If zero, a default timeout of 10 seconds will be used
 	HTTPTimeout time.Duration
 
+	// MaxOCSPResponseBytes bounds how much of an external OCSP response body
+	// is buffered into memory, protecting against a malicious or
+	// misbehaving responder streaming an unbounded body. If zero,
+	// DefaultMaxOCSPResponseBytes is used.
+	MaxOCSPResponseBytes int64
+
+	// MaxCRLResponseBytes bounds how much of an external CRL response body
+	// is buffered into memory, protecting against a malicious or
+	// misbehaving responder streaming an unbounded body. If zero,
+	// DefaultMaxCRLResponseBytes is used.
+	MaxCRLResponseBytes int64
+
 	// MinRSAKeySize constrains the minimum bit size for RSA keys (e.g. 2048, 4096)
 	MinRSAKeySize int
 
@@ -115,14 +142,14 @@ type Signer struct {
 	TimestampTrusted   bool                 `json:"timestamp_trusted"`          // Whether timestamp certificate chain is trusted
 	VerificationTime   *time.Time           `json:"verification_time"`          // Time used for certificate validation
 	TimeSource         string               `json:"time_source"`                // "embedded_timestamp", "signature_time", "current_time"
-	TimeWarnings       []string             `json:"time_warnings,omitempty"`    // WARNINGs about time validation
+	Warnings           []error              `json:"warnings,omitempty"`         // Non-fatal warnings encountered during verification
 	ValidationErrors   []error              `json:"-"`                          // Validation errors encountered
 }
 
 // NewSigner creates a new Signer with default values.
 func NewSigner() *Signer {
 	return &Signer{
-		TimeWarnings: []string{},
+		Warnings: []error{},
 	}
 }
 

@@ -125,7 +125,7 @@ func (b *VerifyBuilder) doExecute() {
 			TrustedChain:   signer.TrustedIssuer,
 			Revoked:        signer.RevokedCertificate,
 			TimestampValid: signer.TimestampTrusted,
-			Warnings:       signer.TimeWarnings,
+			Warnings:       signer.Warnings,
 		}
 
 		// Add errors if any
@@ -179,7 +179,7 @@ type SignatureVerifyResult struct {
 	Revoked        bool
 	TimestampValid bool
 	Errors         []error
-	Warnings       []string
+	Warnings       []error
 }
 
 // DocumentInfo contains information about the PDF document.

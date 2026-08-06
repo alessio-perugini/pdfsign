@@ -367,8 +367,9 @@ func checkDocMDP(v pdf.Value, file io.ReaderAt, fileSize int64, signer *Signer) 
 					if err := checkIncrementalUpdateScope(file, fileSize, signedEnd); err != nil {
 						return err
 					}
-					signer.TimeWarnings = append(signer.TimeWarnings,
-						fmt.Sprintf("DocMDP P=%d: incremental update found; page content/resources were not among the objects it rewrote", perms))
+					signer.Warnings = append(signer.Warnings, &Warning{
+						Msg: fmt.Sprintf("DocMDP P=%d: incremental update found; page content/resources were not among the objects it rewrote", perms),
+					})
 				}
 			}
 		}

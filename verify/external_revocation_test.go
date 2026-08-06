@@ -3,6 +3,7 @@ package verify
 import (
 	"bytes"
 	"crypto/x509"
+	"errors"
 	"io"
 	"math/big"
 	"net/http"
@@ -409,7 +410,7 @@ func TestReadLimitedBody(t *testing.T) {
 	})
 }
 
-func TestWarnIfUnexpectedContentType(t *testing.T) {
+func TestCheckContentType(t *testing.T) {
 	tests := []struct {
 		name        string
 		contentType string
@@ -428,20 +429,27 @@ func TestWarnIfUnexpectedContentType(t *testing.T) {
 			if tt.contentType != "" {
 				resp.Header.Set("Content-Type", tt.contentType)
 			}
-			got := warnIfUnexpectedContentType(resp, tt.expected, "RFC X")
-			if (got != "") != tt.wantWarning {
-				t.Errorf("warnIfUnexpectedContentType() = %q, wantWarning=%v", got, tt.wantWarning)
+			got := checkContentType(resp, "http://example.test/crl", tt.expected, "RFC X")
+			if (got != nil) != tt.wantWarning {
+				t.Errorf("checkContentType() = %v, wantWarning=%v", got, tt.wantWarning)
+			}
+			var ctWarning *ContentTypeWarning
+			if got != nil && !errors.As(got, &ctWarning) {
+				t.Errorf("expected a *ContentTypeWarning, got %T", got)
 			}
 		})
 	}
 }
 
 // TestPerformExternalCRLCheck_OversizedResponseRejected proves an oversized
-// CRL response is rejected rather than fully buffered into memory.
+// CRL response is rejected rather than fully buffered into memory, and that
+// MaxCRLResponseBytes is honored when set (a small limit here keeps the
+// test fast instead of transferring the full default 256 MiB).
 func TestPerformExternalCRLCheck_OversizedResponseRejected(t *testing.T) {
+	const limit = 1000
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(bytes.Repeat([]byte{0x30}, maxCRLResponseBytes+1))
+		_, _ = w.Write(bytes.Repeat([]byte{0x30}, limit+1))
 	}))
 	defer server.Close()
 
@@ -449,7 +457,7 @@ func TestPerformExternalCRLCheck_OversizedResponseRejected(t *testing.T) {
 		SerialNumber:          big.NewInt(1),
 		CRLDistributionPoints: []string{server.URL},
 	}
-	options := &VerifyOptions{EnableExternalRevocationCheck: true}
+	options := &VerifyOptions{EnableExternalRevocationCheck: true, MaxCRLResponseBytes: limit}
 
 	_, _, _, err := performExternalCRLCheck(cert, options)
 	if err == nil {

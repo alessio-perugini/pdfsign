@@ -173,8 +173,8 @@ func TestBuildCertificateChainsWithOptionsUnit(t *testing.T) {
 // --- Unit test for validateTimestampCertificate ---
 func TestValidateTimestampCertificateUnit(t *testing.T) {
 	// Simulate nil timestamp
-	ok, msg := validateTimestampCertificate(nil, &VerifyOptions{})
-	if ok || msg == "" {
+	ok, warning := validateTimestampCertificate(nil, &VerifyOptions{})
+	if ok || warning == nil {
 		t.Error("expected failure for nil timestamp")
 	}
 }

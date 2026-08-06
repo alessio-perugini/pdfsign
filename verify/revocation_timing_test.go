@@ -170,7 +170,7 @@ func TestRevocationTimingWithMockData(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			signer := tt.setupSigner()
-			initialWarnings := len(signer.TimeWarnings)
+			initialWarnings := len(signer.Warnings)
 
 			// Create a mock certificate for testing
 			cert := &Certificate{
@@ -189,8 +189,8 @@ func TestRevocationTimingWithMockData(t *testing.T) {
 				// Certificate was revoked after signing - only add warning for trusted timestamps
 				if signer.TimeSource == "embedded_timestamp" {
 					// With trusted timestamp, signature remains valid but add informational warning
-					signer.TimeWarnings = append(signer.TimeWarnings,
-						"Certificate was revoked after signing time (test)")
+					signer.Warnings = append(signer.Warnings,
+						&Warning{Msg: "Certificate was revoked after signing time (test)"})
 				} else {
 					// Without trusted timestamp, be conservative and mark as revoked
 					signer.RevokedCertificate = true
@@ -202,10 +202,10 @@ func TestRevocationTimingWithMockData(t *testing.T) {
 				t.Errorf("RevokedBeforeSigning = %v, want %v", cert.RevokedBeforeSigning, tt.expectedRevokedBefore)
 			}
 
-			newWarnings := len(signer.TimeWarnings) - initialWarnings
+			newWarnings := len(signer.Warnings) - initialWarnings
 			if newWarnings != tt.expectedTimeWarnings {
 				t.Errorf("Expected %d new warnings, got %d. Warnings: %v",
-					tt.expectedTimeWarnings, newWarnings, signer.TimeWarnings)
+					tt.expectedTimeWarnings, newWarnings, signer.Warnings)
 			}
 
 			if signer.RevokedCertificate != tt.expectedSignerRevoked {
@@ -218,8 +218,8 @@ func TestRevocationTimingWithMockData(t *testing.T) {
 			t.Logf("  TimeSource: %s", signer.TimeSource)
 			t.Logf("  RevokedBeforeSigning: %v", cert.RevokedBeforeSigning)
 			t.Logf("  SignerRevoked: %v", signer.RevokedCertificate)
-			if len(signer.TimeWarnings) > 0 {
-				t.Logf("  Warnings: %v", signer.TimeWarnings)
+			if len(signer.Warnings) > 0 {
+				t.Logf("  Warnings: %v", signer.Warnings)
 			}
 		})
 	}

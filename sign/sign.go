@@ -62,6 +62,8 @@ func SignFile(input string, output string, sign_data SignData) error {
 
 // SignWithData signs a PDF document using the provided signature data.
 // It performs a single incremental update.
+//
+// Deprecated: Use pdf.OpenFile() and doc.Sign() instead.
 func SignWithData(input io.ReadSeeker, output io.Writer, rdr *pdf.Reader, size int64, sign_data SignData) error {
 	if sign_data.Signature.Info.Date.IsZero() {
 		sign_data.Signature.Info.Date = time.Now()

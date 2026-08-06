@@ -144,6 +144,9 @@ func (d *Document) Write(output io.Writer) (*Result, error) {
 
 		isLast := i == len(d.pendingSigns)-1
 		var buf bytes.Buffer
+		//nolint:staticcheck // sign.SignWithData is deprecated for external callers in favor of
+		// this fluent API, but it's the underlying engine Document.Sign()/Write() itself is built
+		// on, so calling it here is intentional, not a stale usage that should be migrated away.
 		err = sign.SignWithData(rs, &buf, currentRdr, currentSize, signData)
 		if err != nil {
 			return nil, err

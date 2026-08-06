@@ -210,6 +210,7 @@ func TestSignPDFImpl(t *testing.T) {
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageEmailProtection},
 	}
 	certBytes, _ := x509.CreateCertificate(rand.Reader, &template, &template, priv.Public(), priv)
 	_ = pem.Encode(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: certBytes})

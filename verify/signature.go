@@ -8,6 +8,8 @@ import (
 	"encoding/asn1"
 	"fmt"
 	"io"
+	"regexp"
+	"strconv"
 
 	"github.com/digitorus/pdf"
 	"github.com/digitorus/pdfsign/revocation"
@@ -24,7 +26,7 @@ func VerifySignature(v pdf.Value, file io.ReaderAt, fileSize int64, options *Ver
 	signer.ContactInfo = v.Key("ContactInfo").Text()
 
 	// Check for DocMDP and incremental updates
-	if err := checkDocMDP(v, fileSize, signer); err != nil {
+	if err := checkDocMDP(v, file, fileSize, signer); err != nil {
 		signer.ValidationErrors = append(signer.ValidationErrors, &ValidationError{Msg: fmt.Sprintf("DocMDP validation failed: %v", err)})
 		return signer, nil
 	}
@@ -115,7 +117,7 @@ func VerifySignature(v pdf.Value, file io.ReaderAt, fileSize int64, options *Ver
 	var revInfo revocation.InfoArchival
 	_ = p7.UnmarshalSignedAttribute(asn1.ObjectIdentifier{1, 2, 840, 113583, 1, 1, 8}, &revInfo)
 
-	certError := buildCertificateChainsWithOptions(p7, signer, revInfo, options)
+	certError := buildCertificateChainsWithOptions(p7, signer, revInfo, options, isDocTimeStamp)
 	if certError != nil {
 		signer.ValidationErrors = append(signer.ValidationErrors, certError)
 	}
@@ -314,7 +316,7 @@ func verifySignature(p7 *pkcs7.PKCS7, signer *Signer) error {
 }
 
 // checkDocMDP verifies Document Modification Detection and Prevention permissions.
-func checkDocMDP(v pdf.Value, fileSize int64, signer *Signer) error {
+func checkDocMDP(v pdf.Value, file io.ReaderAt, fileSize int64, signer *Signer) error {
 	refs := v.Key("Reference")
 	if refs.IsNull() || refs.Kind() != pdf.Array {
 		return nil
@@ -353,19 +355,142 @@ func checkDocMDP(v pdf.Value, fileSize int64, signer *Signer) error {
 					return fmt.Errorf("incremental update found but P=1 (NoChanges) permits none")
 				}
 
-				// P=2: Form filling permitted
-				if perms == 2 {
-					// TODO: validate that the update only contains form moves/values or signature.
-					signer.TimeWarnings = append(signer.TimeWarnings, "DocMDP P=2: Incremental update found (content verification skipped)")
-				}
-
-				// P=3: Annotations permitted
-				if perms == 3 {
-					// TODO: validate annotations
-					signer.TimeWarnings = append(signer.TimeWarnings, "DocMDP P=3: Incremental update found (content verification skipped)")
+				// P=2 (form filling) and P=3 (annotations) permit an
+				// incremental update, but never one that rewrites a page's
+				// own content stream or resources - legitimate form fills,
+				// new signatures, and new annotations are always written as
+				// new, additional objects. An update that also rewrites page
+				// content in the same pass (hidden behind a permitted
+				// change) is the PDF "Shadow Attack" pattern (Mainka et al.,
+				// USENIX Security 2021); reject it rather than merely warn.
+				if perms == 2 || perms == 3 {
+					if err := checkIncrementalUpdateScope(file, fileSize, signedEnd); err != nil {
+						return err
+					}
+					signer.TimeWarnings = append(signer.TimeWarnings,
+						fmt.Sprintf("DocMDP P=%d: incremental update found; page content/resources were not among the objects it rewrote", perms))
 				}
 			}
 		}
 	}
 	return nil
+}
+
+// objDefPattern matches a classic PDF indirect object definition header
+// ("<id> <gen> obj"), capturing the object number.
+var objDefPattern = regexp.MustCompile(`(?:^|[^0-9])([0-9]+)[ \t\r\n\f\x00]+[0-9]+[ \t\r\n\f\x00]+obj\b`)
+
+// checkIncrementalUpdateScope returns an error if the incremental update
+// appended after signedEnd redefines a page object, or a page's own
+// /Contents or /Resources object, in the CURRENT (fully updated) document.
+//
+// Limitation: object definitions are located by scanning the update's raw
+// bytes for classic "<id> <gen> obj" headers. An object written only inside
+// a compressed object stream (used by some xref-stream-format incremental
+// updates) has no such textual header and is not covered by this check.
+func checkIncrementalUpdateScope(file io.ReaderAt, fileSize, signedEnd int64) error {
+	rdr, err := pdf.NewReader(file, fileSize)
+	if err != nil {
+		return nil // Can't determine scope; structural checks elsewhere catch a broken file.
+	}
+
+	protected := make(map[uint32]bool)
+	pagesRoot := rdr.Trailer().Key("Root").Key("Pages")
+	collectProtectedPageObjects(pagesRoot, pagesRoot.Key("Resources"), protected, make(map[uint32]bool))
+	if len(protected) == 0 {
+		return nil
+	}
+
+	updateLen := fileSize - signedEnd
+	if updateLen <= 0 || updateLen > 1<<28 {
+		return nil
+	}
+	buf := make([]byte, updateLen)
+	if _, err := file.ReadAt(buf, signedEnd); err != nil {
+		return nil
+	}
+
+	for _, m := range objDefPattern.FindAllSubmatch(buf, -1) {
+		id, err := strconv.ParseUint(string(m[1]), 10, 32)
+		if err != nil {
+			continue
+		}
+		if protected[uint32(id)] {
+			return fmt.Errorf("incremental update redefines object %d (a page, its content stream, or its resources), which DocMDP form-filling/annotation permissions do not allow", id)
+		}
+	}
+	return nil
+}
+
+// collectProtectedPageObjects walks the current page tree starting at node,
+// adding to protected the object ID of every page and, where present as its
+// own indirect object, each page's Contents and Resources. Resources not set
+// directly on a leaf page are inherited from the nearest ancestor Pages node
+// that has one, per ISO 32000-1 7.7.3.4. visited guards against cycles in a
+// malformed or adversarial page tree.
+func collectProtectedPageObjects(node, inheritedResources pdf.Value, protected map[uint32]bool, visited map[uint32]bool) {
+	if node.IsNull() {
+		return
+	}
+	if id := node.GetPtr().GetID(); id > 0 {
+		if visited[id] {
+			return
+		}
+		visited[id] = true
+		protected[id] = true
+	}
+
+	resources := node.Key("Resources")
+	if resources.IsNull() {
+		resources = inheritedResources
+	}
+
+	if kids := node.Key("Kids"); kids.Kind() == pdf.Array {
+		for i := 0; i < kids.Len(); i++ {
+			collectProtectedPageObjects(kids.Index(i), resources, protected, visited)
+		}
+		return
+	}
+
+	// Leaf page.
+	switch contents := node.Key("Contents"); contents.Kind() {
+	case pdf.Array:
+		for i := 0; i < contents.Len(); i++ {
+			if id := contents.Index(i).GetPtr().GetID(); id > 0 {
+				protected[id] = true
+			}
+		}
+	default:
+		if id := contents.GetPtr().GetID(); id > 0 {
+			protected[id] = true
+		}
+	}
+
+	if id := resources.GetPtr().GetID(); id > 0 {
+		protected[id] = true
+	}
+	protectResourceEntries(resources, protected)
+}
+
+// protectResourceEntries adds the object ID of every resource directly
+// referenced from a Resources dict's Font, XObject, ExtGState, Pattern,
+// Shading, and Properties sub-dictionaries. A legitimate P=2/P=3 update
+// adds new resources under new object IDs rather than rewriting an existing
+// page's fonts, images, or other resources in place, so protecting these
+// too doesn't risk false positives on legitimate updates.
+func protectResourceEntries(resources pdf.Value, protected map[uint32]bool) {
+	if resources.IsNull() {
+		return
+	}
+	for _, category := range []string{"Font", "XObject", "ExtGState", "Pattern", "Shading", "Properties"} {
+		sub := resources.Key(category)
+		if sub.IsNull() || sub.Kind() != pdf.Dict {
+			continue
+		}
+		for _, key := range sub.Keys() {
+			if id := sub.Key(key).GetPtr().GetID(); id > 0 {
+				protected[id] = true
+			}
+		}
+	}
 }

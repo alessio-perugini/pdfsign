@@ -17,7 +17,14 @@ import (
 // signer's ValidationErrors. This covers an untrusted/unverifiable chain for the leaf (signer)
 // certificate, revocation data parse failures, and OCSP/CRL signature issues. None of these stop
 // certificate chain building for the remaining certificates.
-func buildCertificateChainsWithOptions(p7 *pkcs7.PKCS7, signer *Signer, revInfo revocation.InfoArchival, options *VerifyOptions) error {
+//
+// isDocTimeStamp indicates p7.Certificates[0] is a TSA's own certificate
+// (the signature being verified IS a document timestamp) rather than a PDF
+// signer's certificate. The RequireDigitalSignatureKU/RequiredEKUs/
+// AllowedEKUs policy below is meant for signer certificates and does not
+// apply to it - its EKU (id-kp-timeStamping) is instead checked separately
+// by validateTimestampCertificate.
+func buildCertificateChainsWithOptions(p7 *pkcs7.PKCS7, signer *Signer, revInfo revocation.InfoArchival, options *VerifyOptions, isDocTimeStamp bool) error {
 	// PDF signing certificates conventionally carry the Document Signing EKU
 	// (1.2.840.113583.1.1.8 / RFC 9336, OID 1.3.6.1.5.5.7.3.36), which Go's
 	// x509 package does not recognize as a named ExtKeyUsage constant. Go
@@ -92,6 +99,29 @@ func buildCertificateChainsWithOptions(p7 *pkcs7.PKCS7, signer *Signer, revInfo 
 				valErr = errors.Join(chainErr, valErr)
 			} else {
 				valErr = chainErr
+			}
+		}
+
+		// KeyUsage/ExtKeyUsage policy (RequireDigitalSignatureKU,
+		// RequireNonRepudiation, RequiredEKUs/AllowedEKUs) only applies to the
+		// signer's own (leaf) certificate: CA certificates conventionally
+		// carry KeyUsageCertSign rather than DigitalSignature/
+		// ContentCommitment, so applying this check to the whole chain would
+		// reject legitimate CAs rather than enforce signer policy.
+		if i == 0 && !isDocTimeStamp && (!c.KeyUsageValid || !c.ExtKeyUsageValid) {
+			msg := c.KeyUsageError
+			if c.ExtKeyUsageError != "" {
+				if msg != "" {
+					msg += "; " + c.ExtKeyUsageError
+				} else {
+					msg = c.ExtKeyUsageError
+				}
+			}
+			policyErr := &PolicyError{Msg: msg}
+			if valErr != nil {
+				valErr = errors.Join(policyErr, valErr)
+			} else {
+				valErr = policyErr
 			}
 		}
 
@@ -241,7 +271,9 @@ func applyRevocationStatus(
 
 		if resp.Status != ocsp.Good {
 			c.RevocationTime = &resp.RevokedAt
-			applyRevocationImpact(signer, c, resp.RevokedAt)
+			if err := applyRevocationImpact(signer, c, resp.RevokedAt); err != nil {
+				valErr = err
+			}
 		}
 
 		if len(chain) > 0 && len(chain[0]) > 1 {
@@ -262,7 +294,9 @@ func applyRevocationStatus(
 	if revocationTime, ok := crlStatus[serialStr]; !options.SkipCRL && ok && revocationTime != nil {
 		c.CRLEmbedded = true
 		c.RevocationTime = revocationTime
-		applyRevocationImpact(signer, c, *revocationTime)
+		if err := applyRevocationImpact(signer, c, *revocationTime); err != nil && valErr == nil {
+			valErr = err
+		}
 	} else if !options.SkipCRL && len(ocspStatus) == 0 && len(crlStatus) > 0 {
 		// CRL is embedded but this certificate is not listed (not revoked)
 		c.CRLEmbedded = true
@@ -277,7 +311,9 @@ func applyRevocationStatus(
 				c.OCSPExternal = true
 				if extResp.Status != ocsp.Good {
 					c.RevocationTime = &extResp.RevokedAt
-					applyRevocationImpact(signer, c, extResp.RevokedAt)
+					if err := applyRevocationImpact(signer, c, extResp.RevokedAt); err != nil && valErr == nil {
+						valErr = err
+					}
 				}
 			}
 		}
@@ -287,7 +323,9 @@ func applyRevocationStatus(
 				c.CRLExternal = true
 				if isRevoked {
 					c.RevocationTime = revocationTime
-					applyRevocationImpact(signer, c, *revocationTime)
+					if err := applyRevocationImpact(signer, c, *revocationTime); err != nil && valErr == nil {
+						valErr = err
+					}
 				}
 			}
 		}
@@ -300,25 +338,31 @@ func applyRevocationStatus(
 }
 
 // applyRevocationImpact updates the signer and certificate revocation fields
-// after a revocation event is detected.
-func applyRevocationImpact(signer *Signer, c *Certificate, revocationTime time.Time) {
+// after a revocation event is detected, and returns a non-nil error when the
+// revocation should invalidate the signature (signer.RevokedCertificate is
+// set to true in that case; the caller must propagate the error into
+// signer.ValidationErrors, since RevokedCertificate alone is not otherwise
+// consulted when determining whether the signature is valid).
+func applyRevocationImpact(signer *Signer, c *Certificate, revocationTime time.Time) error {
 	revokedBeforeSigning := signer.IsRevokedBeforeSigning(revocationTime)
 	c.RevokedBeforeSigning = revokedBeforeSigning
 
 	if revokedBeforeSigning {
 		signer.RevokedCertificate = true
-		return
+		return &RevocationError{Msg: fmt.Sprintf("certificate was revoked before signing (revoked: %v)", revocationTime)}
 	}
 
 	if signer.TimeSource == "embedded_timestamp" {
 		signer.TimeWarnings = append(signer.TimeWarnings,
 			fmt.Sprintf("Certificate was revoked after signing time (revoked: %v, signed: %v)",
 				revocationTime, signer.VerificationTime))
-	} else {
-		signer.RevokedCertificate = true
-		signer.TimeWarnings = append(signer.TimeWarnings,
-			"Certificate revoked, but cannot determine if revocation occurred before or after signing without trusted timestamp")
+		return nil
 	}
+
+	signer.RevokedCertificate = true
+	signer.TimeWarnings = append(signer.TimeWarnings,
+		"Certificate revoked, but cannot determine if revocation occurred before or after signing without trusted timestamp")
+	return &RevocationError{Msg: "certificate is revoked and revocation time relative to signing could not be determined"}
 }
 
 // buildRevocationWarning returns a human-readable warning string describing the

@@ -325,7 +325,7 @@ func TestBuildChains_ErrorHandling(t *testing.T) {
 	options := DefaultVerifyOptions()
 
 	// This should run without panic and accumulate parse errors into the returned error
-	err := buildCertificateChainsWithOptions(p7, signer, revInfo, options)
+	err := buildCertificateChainsWithOptions(p7, signer, revInfo, options, false)
 	if err == nil {
 		t.Error("Expected non-nil error for unparseable OCSP/CRL data")
 	}
@@ -389,4 +389,76 @@ func TestApplyRevocationStatus_SkipFlags(t *testing.T) {
 			t.Error("expected OCSPEmbedded to stay false when SkipRevocationCheck is set")
 		}
 	})
+}
+
+// TestApplyRevocationStatus_RevokedCertificateReturnsError proves that a
+// certificate found to be revoked produces an actual error, not just the
+// informational RevokedCertificate flag - without this, the flag alone
+// never propagates into ValidationErrors and Valid() incorrectly stays
+// true for a signature made with a revoked certificate.
+func TestApplyRevocationStatus_RevokedCertificateReturnsError(t *testing.T) {
+	revokedAt := time.Now().Add(-time.Hour)
+	cert := &x509.Certificate{SerialNumber: big.NewInt(42)}
+	ocspStatus := map[string]*ocsp.Response{
+		"2a": {SerialNumber: big.NewInt(42), Status: ocsp.Revoked, RevokedAt: revokedAt},
+	}
+
+	signer := NewSigner() // VerificationTime is nil -> conservatively treated as revoked-before-signing
+	var c Certificate
+	options := &VerifyOptions{}
+
+	err := applyRevocationStatus(cert, nil, ocspStatus, map[string]*time.Time{}, signer, &c, options)
+	if err == nil {
+		t.Fatal("expected an error for a revoked certificate, got nil")
+	}
+	if !signer.RevokedCertificate {
+		t.Error("expected RevokedCertificate to be true")
+	}
+}
+
+// TestBuildChains_KeyUsagePolicyViolationReturnsError proves that a leaf
+// certificate failing the default KeyUsage/ExtKeyUsage policy (e.g.
+// RequireDigitalSignatureKU, RequiredEKUs/AllowedEKUs) produces an actual
+// error - without this, validateKeyUsage's result is computed and recorded
+// on the Certificate struct but never gates ValidSignature/Valid().
+func TestBuildChains_KeyUsagePolicyViolationReturnsError(t *testing.T) {
+	p7 := &pkcs7.PKCS7{
+		Certificates: []*x509.Certificate{{}}, // no KeyUsage, no ExtKeyUsage
+	}
+	signer := NewSigner()
+	options := DefaultVerifyOptions()
+
+	err := buildCertificateChainsWithOptions(p7, signer, revocation.InfoArchival{}, options, false)
+	if err == nil {
+		t.Fatal("expected an error for a certificate with no KeyUsage/ExtKeyUsage, got nil")
+	}
+	var policyErr *PolicyError
+	if !errors.As(err, &policyErr) {
+		t.Errorf("expected a *PolicyError among the returned error(s), got: %v", err)
+	}
+	if len(signer.Certificates) != 1 || signer.Certificates[0].KeyUsageValid {
+		t.Error("expected KeyUsageValid to be false")
+	}
+}
+
+// TestBuildChains_DocTimeStampSkipsSignerEKUPolicy proves that a document
+// timestamp's own TSA certificate (isDocTimeStamp=true) is not rejected by
+// the signer KeyUsage/EKU policy (Document Signing / Email Protection /
+// Client Auth), which does not apply to it - only its own
+// id-kp-timeStamping EKU matters, checked separately.
+func TestBuildChains_DocTimeStampSkipsSignerEKUPolicy(t *testing.T) {
+	p7 := &pkcs7.PKCS7{
+		Certificates: []*x509.Certificate{{
+			KeyUsage:    x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping},
+		}},
+	}
+	signer := NewSigner()
+	options := DefaultVerifyOptions()
+
+	err := buildCertificateChainsWithOptions(p7, signer, revocation.InfoArchival{}, options, true)
+	var policyErr *PolicyError
+	if errors.As(err, &policyErr) {
+		t.Errorf("did not expect a KeyUsage/EKU policy error for a DocTimeStamp certificate, got: %v", policyErr)
+	}
 }

@@ -2,7 +2,41 @@ package verify
 
 import (
 	"crypto/x509"
+	"encoding/asn1"
 )
+
+// documentSigningEKUOID is the Document Signing EKU (1.3.6.1.5.5.7.3.36,
+// RFC 9336). Go's x509 package has no named ExtKeyUsage constant for it, so
+// a certificate carrying it parses the OID into Certificate.
+// UnknownExtKeyUsage rather than Certificate.ExtKeyUsage.
+var documentSigningEKUOID = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 36}
+
+// documentSigningEKU is a sentinel value used in RequiredEKUs/AllowedEKUs
+// lists (e.g. DefaultVerifyOptions, getVerificationEKUs) to stand in for the
+// Document Signing OID, since no real certificate can ever have this value
+// in its parsed ExtKeyUsage slice - certHasEKU resolves it against
+// UnknownExtKeyUsage instead.
+const documentSigningEKU = x509.ExtKeyUsage(36)
+
+// certHasEKU reports whether cert carries the given Extended Key Usage,
+// resolving the Document Signing sentinel against UnknownExtKeyUsage since
+// Go cannot parse that OID into the named ExtKeyUsage slice.
+func certHasEKU(cert *x509.Certificate, eku x509.ExtKeyUsage) bool {
+	if eku == documentSigningEKU {
+		for _, oid := range cert.UnknownExtKeyUsage {
+			if oid.Equal(documentSigningEKUOID) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, certEKU := range cert.ExtKeyUsage {
+		if certEKU == eku {
+			return true
+		}
+	}
+	return false
+}
 
 // validateKeyUsage validates certificate Key Usage and Extended Key Usage for PDF signing
 // according to RFC 9336 and common industry practices
@@ -27,7 +61,7 @@ func validateKeyUsage(cert *x509.Certificate, options *VerifyOptions) (kuValid b
 	}
 
 	// Validate Extended Key Usage
-	if len(cert.ExtKeyUsage) == 0 {
+	if len(cert.ExtKeyUsage) == 0 && len(cert.UnknownExtKeyUsage) == 0 {
 		ekuValid = false
 		ekuError = "certificate has no Extended Key Usage extension"
 		return
@@ -35,33 +69,19 @@ func validateKeyUsage(cert *x509.Certificate, options *VerifyOptions) (kuValid b
 
 	// Check if any required EKUs are present
 	hasRequiredEKU := false
-	if len(options.RequiredEKUs) > 0 {
-		for _, requiredEKU := range options.RequiredEKUs {
-			for _, certEKU := range cert.ExtKeyUsage {
-				if certEKU == requiredEKU {
-					hasRequiredEKU = true
-					break
-				}
-			}
-			if hasRequiredEKU {
-				break
-			}
+	for _, requiredEKU := range options.RequiredEKUs {
+		if certHasEKU(cert, requiredEKU) {
+			hasRequiredEKU = true
+			break
 		}
 	}
 
 	// Check if any allowed EKUs are present (fallback)
 	hasAllowedEKU := false
-	if len(options.AllowedEKUs) > 0 {
-		for _, allowedEKU := range options.AllowedEKUs {
-			for _, certEKU := range cert.ExtKeyUsage {
-				if certEKU == allowedEKU {
-					hasAllowedEKU = true
-					break
-				}
-			}
-			if hasAllowedEKU {
-				break
-			}
+	for _, allowedEKU := range options.AllowedEKUs {
+		if certHasEKU(cert, allowedEKU) {
+			hasAllowedEKU = true
+			break
 		}
 	}
 
@@ -88,7 +108,7 @@ func validateKeyUsage(cert *x509.Certificate, options *VerifyOptions) (kuValid b
 // Includes Document Signing EKU and common alternatives (ExtKeyUsageAny removed as it makes others redundant)
 func getVerificationEKUs() []x509.ExtKeyUsage {
 	return []x509.ExtKeyUsage{
-		x509.ExtKeyUsage(36),            // Document Signing EKU (1.3.6.1.5.5.7.3.36) per RFC 9336
+		documentSigningEKU,              // Document Signing EKU (1.3.6.1.5.5.7.3.36) per RFC 9336
 		x509.ExtKeyUsageEmailProtection, // Email Protection (1.3.6.1.5.5.7.3.4) - common alternative
 		x509.ExtKeyUsageClientAuth,      // Client Authentication (1.3.6.1.5.5.7.3.2) - another alternative
 	}

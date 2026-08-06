@@ -3,6 +3,7 @@ package verify
 import (
 	"bytes"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -54,7 +55,16 @@ func performExternalOCSPCheckWithFunc(cert, issuer *x509.Certificate, options *V
 	// Try each OCSP server URL
 	var lastErr error
 	for _, serverURL := range cert.OCSPServer {
-		resp, err := client.Post(serverURL, "application/ocsp-request", bytes.NewReader(ocspReq))
+		req, err := http.NewRequest(http.MethodPost, serverURL, bytes.NewReader(ocspReq))
+		if err != nil {
+			lastErr = fmt.Errorf("failed to build OCSP request for %s: %v", serverURL, err)
+			continue
+		}
+		// RFC 6960 SS4.2.1: request and response bodies are DER-encoded ASN.1.
+		req.Header.Set("Content-Type", "application/ocsp-request")
+		req.Header.Set("Accept", "application/ocsp-response")
+
+		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("failed to contact OCSP server %s: %v", serverURL, err)
 			continue
@@ -79,7 +89,7 @@ func performExternalOCSPCheckWithFunc(cert, issuer *x509.Certificate, options *V
 
 		ocspResp, err := ocsp.ParseResponse(body, issuer)
 		if err != nil {
-			lastErr = fmt.Errorf("failed to parse OCSP response from %s: %v", serverURL, err)
+			lastErr = fmt.Errorf("failed to parse OCSP response from %s (content-type %q): %v", serverURL, resp.Header.Get("Content-Type"), err)
 			continue
 		}
 
@@ -114,7 +124,20 @@ func performExternalCRLCheck(cert *x509.Certificate, options *VerifyOptions) (*t
 	// Try each CRL distribution point
 	var lastErr error
 	for _, crlURL := range cert.CRLDistributionPoints {
-		resp, err := client.Get(crlURL)
+		req, err := http.NewRequest(http.MethodGet, crlURL, nil)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to build CRL request for %s: %v", crlURL, err)
+			continue
+		}
+		// CRL distribution points are inconsistent about Content-Type in
+		// practice - RFC 5280 implies raw DER as application/pkix-crl, but
+		// application/pkcs7-mime, application/x-pkcs7-crl, and a generic
+		// application/octet-stream are all common, especially from internal/
+		// enterprise CAs - so request the canonical types but sniff the body
+		// (see decodeCRLBody) rather than trusting or requiring the header.
+		req.Header.Set("Accept", "application/pkix-crl, application/pkcs7-mime, application/x-pkcs7-crl, application/octet-stream")
+
+		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("failed to download CRL from %s: %v", crlURL, err)
 			continue
@@ -137,9 +160,9 @@ func performExternalCRLCheck(cert *x509.Certificate, options *VerifyOptions) (*t
 			continue
 		}
 
-		crl, err := x509.ParseRevocationList(body)
+		crl, err := x509.ParseRevocationList(decodeCRLBody(body))
 		if err != nil {
-			lastErr = fmt.Errorf("failed to parse CRL from %s: %v", crlURL, err)
+			lastErr = fmt.Errorf("failed to parse CRL from %s (content-type %q): %v", crlURL, resp.Header.Get("Content-Type"), err)
 			continue
 		}
 
@@ -155,4 +178,20 @@ func performExternalCRLCheck(cert *x509.Certificate, options *VerifyOptions) (*t
 	}
 
 	return nil, false, lastErr
+}
+
+// decodeCRLBody returns the DER-encoded CRL bytes from body. Most CRL
+// distribution points serve raw DER as RFC 5280 specifies, but some CAs -
+// especially internal/enterprise ones - serve PEM-encoded CRLs instead
+// ("-----BEGIN X509 CRL-----"). If body is PEM-encoded, its decoded
+// contents are returned; otherwise body is returned unchanged.
+func decodeCRLBody(body []byte) []byte {
+	if !bytes.HasPrefix(bytes.TrimSpace(body), []byte("-----BEGIN")) {
+		return body
+	}
+	block, _ := pem.Decode(body)
+	if block == nil {
+		return body
+	}
+	return block.Bytes
 }

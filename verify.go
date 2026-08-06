@@ -72,6 +72,9 @@ func (b *VerifyBuilder) doExecute() {
 	if b.atTime != nil {
 		vOpts.AtTime = *b.atTime
 	}
+	if b.httpTimeout > 0 {
+		vOpts.HTTPTimeout = b.httpTimeout
+	}
 
 	// Initialization validation
 	if b.doc.rdr == nil {
@@ -139,6 +142,14 @@ func (b *VerifyBuilder) doExecute() {
 		}
 		if len(signer.Certificates) > 0 {
 			sigResult.Certificate = signer.Certificates[0].Certificate
+		}
+		if signer.TimeStamp != nil {
+			ts := &TimestampInfo{Time: signer.TimeStamp.Time}
+			if len(signer.TimeStamp.Certificates) > 0 {
+				ts.Certificate = signer.TimeStamp.Certificates[0]
+				ts.Authority = ts.Certificate.Subject.CommonName
+			}
+			sigResult.Timestamp = ts
 		}
 
 		b.signatures = append(b.signatures, sigResult)

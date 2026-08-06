@@ -424,6 +424,7 @@ type VerifyBuilder struct {
 	minRSAKeySize         int
 	minECDSAKeySize       int
 	allowedAlgorithms     []x509.PublicKeyAlgorithm
+	httpTimeout           time.Duration
 
 	// Lazy execution state. once guarantees execute() runs exactly once even
 	// if Valid()/Signatures()/Err()/etc. are called concurrently from
@@ -476,6 +477,13 @@ func (b *VerifyBuilder) SkipCRL(skip bool) *VerifyBuilder {
 // from distribution points specified in the certificates.
 func (b *VerifyBuilder) ExternalChecks(enable bool) *VerifyBuilder {
 	b.externalChecks = enable
+	return b
+}
+
+// HTTPTimeout sets the timeout for external HTTP requests (OCSP/CRL checks) made when
+// ExternalChecks is enabled. If not set, a default of 10 seconds is used.
+func (b *VerifyBuilder) HTTPTimeout(d time.Duration) *VerifyBuilder {
+	b.httpTimeout = d
 	return b
 }
 

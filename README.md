@@ -51,7 +51,7 @@ The library is organized into specialized subpackages, though most users will pr
 | `-location` | string | | Location of the signatory |
 | `-reason` | string | | Reason for signing |
 | `-contact` | string | | Contact information for signatory |
-| `-certType` | string | `CertificationSignature` | Certificate type: `CertificationSignature`, `ApprovalSignature`, `UsageRightsSignature`, `TimeStampSignature` |
+| `-certType` | string | `CertificationSignature` | Certificate type: `CertificationSignature`, `ApprovalSignature`, `DocumentTimestamp` |
 | `-tsa` | string | `https://freetsa.org/tsr` | URL for Time-Stamp Authority |
 
 ### Signing Examples
@@ -64,7 +64,7 @@ The library is organized into specialized subpackages, though most users will pr
 ./pdfsign sign -name "John Doe" -location "New York" -reason "Document approval" input.pdf output.pdf cert.crt key.key
 
 # Timestamp-only signature
-./pdfsign sign -certType "TimeStampSignature" input.pdf output.pdf
+./pdfsign sign -certType "DocumentTimestamp" input.pdf output.pdf
 ```
 
 ## PDF Verification
@@ -108,27 +108,29 @@ The library is organized into specialized subpackages, though most users will pr
 
 ### Verification Output
 
-The verification command outputs JSON with the following key fields:
+The verification command outputs a JSON object with three top-level fields:
 
 | Field | Description |
 |-------|-------------|
-| `ValidSignature` | Whether the cryptographic signature is mathematically valid |
-| `TrustedIssuer` | Whether the certificate chain is trusted by system root certificates |
-| `RevokedCertificate` | Whether any certificate in the chain has been revoked before signing |
-| `KeyUsageValid` | Whether the certificate has appropriate key usage for PDF signing |
-| `ExtKeyUsageValid` | Whether the certificate has proper Extended Key Usage (EKU) values |
-| `TimestampStatus` | Status of embedded timestamp: "valid", "invalid", or "missing" |
-| `TimestampTrusted` | Whether the timestamp token's certificate chain is trusted |
-| `VerificationTime` | The time used for certificate validation |
-| `TimeSource` | Source of verification time: "embedded_timestamp", "signature_time", or "current_time" |
-| `TimeWarnings` | Warnings about time validation (e.g., using untrusted signature time) |
-| `OCSPEmbedded` | Whether OCSP response is embedded in the PDF |
-| `OCSPExternal` | Whether external OCSP checking was performed |
-| `CRLEmbedded` | Whether CRL is embedded in the PDF |
-| `CRLExternal` | Whether external CRL checking was performed |
-| `RevocationTime` | When the certificate was revoked (if applicable) |
-| `RevokedBeforeSigning` | Whether revocation occurred before the signing time |
-| `RevocationWarning` | Human-readable warning about revocation status checking |
+| `document_info` | Document metadata (author, title, page count, ...) |
+| `signers` | One entry per signature found in the document, described below |
+| `valid` | Whether every signature in the document is valid |
+
+Each entry in `signers` has the following key fields:
+
+| Field | Description |
+|-------|-------------|
+| `SignerName` | Name of the signatory, as recorded in the signature |
+| `SigningTime` | Time the signature claims to have been made |
+| `Reason` / `Location` / `Contact` | Signature metadata, as set at signing time |
+| `Certificate` | The signer's X.509 certificate (full `crypto/x509.Certificate` structure) |
+| `Timestamp` | Embedded RFC 3161 timestamp info (`Time`, `Authority`, `Certificate`), or `null` if none |
+| `Valid` | Whether the signature is valid overall (cryptographically valid, chain trusted, not revoked, and no other validation errors) |
+| `TrustedChain` | Whether the certificate chain is trusted (by system roots, `TrustedRoots()`, or `TrustSelfSigned()`) |
+| `Revoked` | Whether the signer's certificate is revoked |
+| `TimestampValid` | Whether an embedded timestamp's certificate chain is trusted |
+| `Errors` | Validation errors that made the signature invalid, if any |
+| `Warnings` | Non-fatal warnings (e.g. using untrusted signature time as a fallback, an RFC-noncompliant revocation response Content-Type) |
 
 
 ### Go Library Usage
@@ -168,10 +170,10 @@ func main() {
     
     // Configure and write
     output, _ := os.Create("signed.pdf")
-    doc.Sign(certificate, privateKey).
+    doc.Sign(privateKey, certificate).
         Reason("Approved").
         Location("New York").
-        Appearance(appearance, 1, 400, 50)
+        Appearance(appearance, 400, 50)
         
     _, err := doc.Write(output)
 }
@@ -333,7 +335,7 @@ doc.Sign(signer, cert).
     SignerName("John Doe").
     Reason("Contract Agreement").
     Location("Amsterdam, NL").
-    Appearance(appearance, 1, 100, 100)
+    Appearance(appearance, 100, 100)
 ```
 
 The `Standard()` method automatically adds:

@@ -69,10 +69,8 @@ func VerifyPDF(input string, enableExternalRevocation, requireDigitalSignatureKU
 		RequireNonRepudiation(requireNonRepudiation).
 		TrustSignatureTime(trustSignatureTime).
 		ValidateTimestampCertificates(validateTimestampCertificates).
-		TrustSelfSigned(allowUntrustedRoots)
-
-	// Note: HTTPTimeout is not currently in VerifyBuilder but was in vOpts.
-	// We'll skip it for now or add it later if critical.
+		TrustSelfSigned(allowUntrustedRoots).
+		HTTPTimeout(httpTimeout)
 
 	if err := result.Err(); err != nil {
 		fmt.Println(err)

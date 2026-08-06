@@ -70,8 +70,12 @@ func TestPDFString(t *testing.T) {
 	}
 
 	for text, expected := range string_compare {
-		if pdfString(text) != expected {
-			t.Errorf("Error while escaping %s. Expected %s, got %s.", text, expected, pdfString(text))
+		got, err := pdfString(text)
+		if err != nil {
+			t.Fatalf("pdfString(%q) returned error: %v", text, err)
+		}
+		if got != expected {
+			t.Errorf("Error while escaping %s. Expected %s, got %s.", text, expected, got)
 		}
 	}
 }
@@ -95,8 +99,12 @@ func TestPdfDateTime(t *testing.T) {
 	}
 
 	for date, expected := range date_compare {
-		if pdfDateTime(date) != expected {
-			t.Errorf("Error while converting date %s to string. Expected %s, got %s.", date.String(), expected, pdfDateTime(date))
+		got, err := pdfDateTime(date)
+		if err != nil {
+			t.Fatalf("pdfDateTime(%s) returned error: %v", date, err)
+		}
+		if got != expected {
+			t.Errorf("Error while converting date %s to string. Expected %s, got %s.", date.String(), expected, got)
 		}
 	}
 }

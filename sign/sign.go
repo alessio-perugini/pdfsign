@@ -300,7 +300,11 @@ func (context *SignContext) addSignatureObject() error {
 	case TimeStampSignature:
 		signature_object = context.createTimestampPlaceholder()
 	default:
-		signature_object = context.createSignaturePlaceholder()
+		var err error
+		signature_object, err = context.createSignaturePlaceholder()
+		if err != nil {
+			return fmt.Errorf("failed to create signature placeholder: %w", err)
+		}
 	}
 
 	// Apply generic object updates if provided

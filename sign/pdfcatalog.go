@@ -2,6 +2,7 @@ package sign
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -42,7 +43,9 @@ func (context *SignContext) createCatalog() ([]byte, error) {
 	for _, key := range root.Keys() {
 		if key != "Type" && key != "AcroForm" {
 			_, _ = fmt.Fprintf(&catalog_buffer, "  /%s ", key)
-			context.serializeCatalogEntry(&catalog_buffer, rootPtr.GetID(), root.Key(key))
+			if err := context.serializeCatalogEntry(&catalog_buffer, rootPtr.GetID(), root.Key(key)); err != nil {
+				return nil, fmt.Errorf("failed to serialize catalog entry %q: %w", key, err)
+			}
 			catalog_buffer.WriteString("\n")
 		}
 	}
@@ -129,11 +132,11 @@ func (context *SignContext) createCatalog() ([]byte, error) {
 }
 
 // serializeCatalogEntry takes a pdf.Value and serializes it to the given writer.
-func (context *SignContext) serializeCatalogEntry(w io.Writer, rootObjId uint32, value pdf.Value) {
+func (context *SignContext) serializeCatalogEntry(w io.Writer, rootObjId uint32, value pdf.Value) error {
 	if ptr := value.GetPtr(); ptr.GetID() > 0 && ptr.GetID() != rootObjId {
 		// Indirect object
 		_, _ = fmt.Fprintf(w, "%d %d R", ptr.GetID(), ptr.GetGen())
-		return
+		return nil
 	}
 
 	// Direct object
@@ -161,7 +164,9 @@ func (context *SignContext) serializeCatalogEntry(w io.Writer, rootObjId uint32,
 				_, _ = fmt.Fprint(w, " ") // Space between items
 			}
 			_, _ = fmt.Fprintf(w, "/%s ", key)
-			context.serializeCatalogEntry(w, rootObjId, value.Key(key))
+			if err := context.serializeCatalogEntry(w, rootObjId, value.Key(key)); err != nil {
+				return err
+			}
 		}
 		_, _ = fmt.Fprint(w, ">>")
 	case pdf.Array:
@@ -170,10 +175,13 @@ func (context *SignContext) serializeCatalogEntry(w io.Writer, rootObjId uint32,
 			if idx > 0 {
 				_, _ = fmt.Fprint(w, " ") // Space between items
 			}
-			context.serializeCatalogEntry(w, rootObjId, value.Index(idx))
+			if err := context.serializeCatalogEntry(w, rootObjId, value.Index(idx)); err != nil {
+				return err
+			}
 		}
 		_, _ = fmt.Fprint(w, "]")
 	case pdf.Stream:
-		panic("stream cannot be a direct object")
+		return errors.New("catalog entry: stream cannot be a direct object")
 	}
+	return nil
 }

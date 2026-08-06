@@ -36,15 +36,15 @@ func findFirstPage(parent pdf.Value) (pdf.Value, error) {
 	return parent, errors.New("could not find first page")
 }
 
-func pdfString(text string) string {
+func pdfString(text string) (string, error) {
 	if !isASCII(text) {
 		// UTF-16BE
 		enc := unicode.UTF16(unicode.BigEndian, unicode.UseBOM).NewEncoder()
 		res, _, err := transform.String(enc, text)
 		if err != nil {
-			panic(err)
+			return "", fmt.Errorf("failed to UTF-16BE encode %q: %w", text, err)
 		}
-		return "(" + res + ")"
+		return "(" + res + ")", nil
 	}
 
 	// UTF-8
@@ -61,10 +61,10 @@ func pdfString(text string) string {
 	text = strings.ReplaceAll(text, "\r", "\\r")
 	text = "(" + text + ")"
 
-	return text
+	return text, nil
 }
 
-func pdfDateTime(date time.Time) string {
+func pdfDateTime(date time.Time) (string, error) {
 	// Calculate timezone offset from GMT.
 	_, original_offset := date.Zone()
 	offset := original_offset
@@ -92,6 +92,7 @@ func pdfDateTime(date time.Time) string {
 
 	return pdfString(dateString)
 }
+
 
 func leftPad(s string, padStr string, pLen int) string {
 	if pLen <= 0 {

@@ -102,7 +102,11 @@ func (context *SignContext) createVisualSignature(visible bool, pageNumber uint3
 	// Define the field type as a signature.
 	visual_signature.WriteString("  /FT /Sig\n")
 	// Set a unique title for the signature field.
-	visual_signature.WriteString(fmt.Sprintf("  /T %s\n", pdfString("Signature "+strconv.Itoa(len(context.existingSignatures)+1))))
+	fieldTitle, err := pdfString("Signature " + strconv.Itoa(len(context.existingSignatures)+1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode signature field title: %w", err)
+	}
+	visual_signature.WriteString(fmt.Sprintf("  /T %s\n", fieldTitle))
 
 	// Reference the signature dictionary.
 	visual_signature.WriteString(fmt.Sprintf("  /V %d 0 R\n", context.SignData.objectId))
@@ -167,7 +171,11 @@ func (context *SignContext) createIncPageUpdate(pageNumber, annot uint32) ([]byt
 		default:
 			val := page.Key(key)
 			if val.Kind() == pdf.String {
-				page_buffer.WriteString(fmt.Sprintf("  /%s %s\n", key, pdfString(val.RawString())))
+				encoded, err := pdfString(val.RawString())
+				if err != nil {
+					return nil, fmt.Errorf("failed to encode page entry %q: %w", key, err)
+				}
+				page_buffer.WriteString(fmt.Sprintf("  /%s %s\n", key, encoded))
 			} else {
 				page_buffer.WriteString(fmt.Sprintf("  /%s %s\n", key, val.String()))
 			}

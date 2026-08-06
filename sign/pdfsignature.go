@@ -26,7 +26,7 @@ const defaultTSATimeout = 30 * time.Second
 
 const signatureByteRangePlaceholder = "/ByteRange[0 ********** ********** **********]"
 
-func (context *SignContext) createSignaturePlaceholder() []byte {
+func (context *SignContext) createSignaturePlaceholder() ([]byte, error) {
 	// Using a buffer because it's way faster than concatenating.
 	var signature_buffer bytes.Buffer
 
@@ -151,23 +151,39 @@ func (context *SignContext) createSignaturePlaceholder() []byte {
 	}
 
 	if context.SignData.Signature.Info.Name != "" {
+		name, err := pdfString(context.SignData.Signature.Info.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode signer name: %w", err)
+		}
 		signature_buffer.WriteString(" /Name ")
-		signature_buffer.WriteString(pdfString(context.SignData.Signature.Info.Name))
+		signature_buffer.WriteString(name)
 		signature_buffer.WriteString("\n")
 	}
 	if context.SignData.Signature.Info.Location != "" {
+		location, err := pdfString(context.SignData.Signature.Info.Location)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode signer location: %w", err)
+		}
 		signature_buffer.WriteString(" /Location ")
-		signature_buffer.WriteString(pdfString(context.SignData.Signature.Info.Location))
+		signature_buffer.WriteString(location)
 		signature_buffer.WriteString("\n")
 	}
 	if context.SignData.Signature.Info.Reason != "" {
+		reason, err := pdfString(context.SignData.Signature.Info.Reason)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode signing reason: %w", err)
+		}
 		signature_buffer.WriteString(" /Reason ")
-		signature_buffer.WriteString(pdfString(context.SignData.Signature.Info.Reason))
+		signature_buffer.WriteString(reason)
 		signature_buffer.WriteString("\n")
 	}
 	if context.SignData.Signature.Info.ContactInfo != "" {
+		contactInfo, err := pdfString(context.SignData.Signature.Info.ContactInfo)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode signer contact info: %w", err)
+		}
 		signature_buffer.WriteString(" /ContactInfo ")
-		signature_buffer.WriteString(pdfString(context.SignData.Signature.Info.ContactInfo))
+		signature_buffer.WriteString(contactInfo)
 		signature_buffer.WriteString("\n")
 	}
 
@@ -182,14 +198,18 @@ func (context *SignContext) createSignaturePlaceholder() []byte {
 	// A timestamp can be embedded in a CMS binary data object (see 12.8.3.3, "CMS
 	// (PKCS #7) signatures").
 	if context.SignData.TSA.URL == "" && !context.SignData.Signature.Info.Date.IsZero() {
+		dateTime, err := pdfDateTime(context.SignData.Signature.Info.Date)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode signing date: %w", err)
+		}
 		signature_buffer.WriteString(" /M ")
-		signature_buffer.WriteString(pdfDateTime(context.SignData.Signature.Info.Date))
+		signature_buffer.WriteString(dateTime)
 		signature_buffer.WriteString("\n")
 	}
 
 	signature_buffer.WriteString(">>\n")
 
-	return signature_buffer.Bytes()
+	return signature_buffer.Bytes(), nil
 }
 
 func (context *SignContext) createTimestampPlaceholder() []byte {

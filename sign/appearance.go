@@ -219,15 +219,20 @@ func computeTextSizeAndPosition(text string, rectWidth, rectHeight float64) (flo
 	return fontSize, textX, textY
 }
 
-func drawText(buffer *bytes.Buffer, text string, fontSize float64, x, y float64) {
-	buffer.WriteString("q\n")                       // Save graphics state
-	buffer.WriteString("BT\n")                      // Begin text
-	fmt.Fprintf(buffer, "/F1 %.2f Tf\n", fontSize)  // Set font and size
-	fmt.Fprintf(buffer, "%.2f %.2f Td\n", x, y)     // Set text position
-	buffer.WriteString("0.2 0.2 0.6 rg\n")          // Set font color to ballpoint-like color (RGB)
-	fmt.Fprintf(buffer, "%s Tj\n", pdfString(text)) // Show text
-	buffer.WriteString("ET\n")                      // End text
-	buffer.WriteString("Q\n")                       // Restore graphics state
+func drawText(buffer *bytes.Buffer, text string, fontSize float64, x, y float64) error {
+	encoded, err := pdfString(text)
+	if err != nil {
+		return fmt.Errorf("failed to encode appearance text: %w", err)
+	}
+	buffer.WriteString("q\n")                      // Save graphics state
+	buffer.WriteString("BT\n")                     // Begin text
+	fmt.Fprintf(buffer, "/F1 %.2f Tf\n", fontSize) // Set font and size
+	fmt.Fprintf(buffer, "%.2f %.2f Td\n", x, y)    // Set text position
+	buffer.WriteString("0.2 0.2 0.6 rg\n")         // Set font color to ballpoint-like color (RGB)
+	fmt.Fprintf(buffer, "%s Tj\n", encoded)        // Show text
+	buffer.WriteString("ET\n")                     // End text
+	buffer.WriteString("Q\n")                      // Restore graphics state
+	return nil
 }
 
 func drawImage(buffer *bytes.Buffer, rectWidth, rectHeight float64) {
@@ -301,7 +306,9 @@ func (context *SignContext) createAppearance(rect [4]float64) ([]byte, error) {
 	if shouldDisplayText {
 		text := context.SignData.Signature.Info.Name
 		fontSize, textX, textY := computeTextSizeAndPosition(text, rectWidth, rectHeight)
-		drawText(&appearance_stream_buffer, text, fontSize, textX, textY)
+		if err := drawText(&appearance_stream_buffer, text, fontSize, textX, textY); err != nil {
+			return nil, fmt.Errorf("failed to draw appearance text: %w", err)
+		}
 	}
 
 	writeFormTypeAndLength(&appearance_buffer, appearance_stream_buffer.Len())

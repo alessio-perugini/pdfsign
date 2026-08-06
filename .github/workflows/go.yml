@@ -210,4 +210,9 @@ jobs:
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin:$PWD/$VERAPDF_DIR
           # veraPDF script name is usually 'verapdf'
-          PDF_CORPUS_CACHE=/tmp/pdf-corpus go test -v ./sign -run TestSignCorpus -download-corpus -timeout 30m
+          # Per-file work here is dominated by spawning external validators
+          # (pdfcpu/ghostscript/veraPDF); corpus_test.go now runs files in
+          # parallel to use that headroom, but two large PDF/A conformance
+          # corpora (veraPDF-corpus, bfo-pdfa-testsuite) still need more than
+          # 30m of margin on a loaded/shared CI runner.
+          PDF_CORPUS_CACHE=/tmp/pdf-corpus go test -v ./sign -run TestSignCorpus -download-corpus -timeout 60m

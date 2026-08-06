@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -131,8 +132,14 @@ func testLocalCorpus(t *testing.T, path string, cert interface{}, key crypto.Sig
 
 	t.Logf("Found %d PDF files in %s", len(files), path)
 
+	// Each file's validation spawns several external processes (pdfcpu,
+	// ghostscript, veraPDF) that dominate wall-clock time; running files in
+	// parallel (bounded by -parallel, default GOMAXPROCS) lets a corpus of
+	// hundreds of files finish well inside the test timeout instead of
+	// paying that per-process overhead strictly sequentially.
 	for _, f := range files {
 		t.Run(filepath.Base(f), func(t *testing.T) {
+			t.Parallel()
 			testSignPDFFile(t, f, cert, key)
 		})
 	}
@@ -143,9 +150,26 @@ func testZipCorpus(t *testing.T, zipPath, subPath string, cert interface{}, key 
 	if err != nil {
 		t.Fatalf("failed to open zip: %v", err)
 	}
-	defer func() { _ = r.Close() }()
+	// Must be t.Cleanup, not defer: this function returns as soon as all
+	// t.Run calls below are issued, which happens before the parallel
+	// subtests actually run their bodies (they only start once this
+	// function - their parent - returns). A defer here would close the zip
+	// while those subtests are still reading from it.
+	t.Cleanup(func() { _ = r.Close() })
 
-	var pdfCount, signedCount, skippedCount int
+	var pdfCount int64
+	var signedCount, skippedCount atomic.Int64
+
+	// t.Cleanup runs after all of t's subtests - including the parallel
+	// ones below - have finished, unlike code placed directly after the
+	// loop (which would run while the parallel subtests are still only
+	// queued, before they've actually executed and updated the counters).
+	t.Cleanup(func() {
+		t.Logf("Corpus %s: %d PDFs, signed %d, skipped %d (invalid source)",
+			filepath.Base(zipPath), pdfCount, signedCount.Load(), skippedCount.Load())
+	})
+
+	// See testLocalCorpus for why these run in parallel.
 	for _, f := range r.File {
 		if subPath != "" && !strings.HasPrefix(f.Name, subPath) {
 			continue
@@ -158,18 +182,16 @@ func testZipCorpus(t *testing.T, zipPath, subPath string, cert interface{}, key 
 		relName := strings.TrimPrefix(f.Name, subPath+"/")
 
 		t.Run(relName, func(t *testing.T) {
+			t.Parallel()
 			signed, skipped := testZipPDFFile(t, f, cert, key)
 			if signed {
-				signedCount++
+				signedCount.Add(1)
 			}
 			if skipped {
-				skippedCount++
+				skippedCount.Add(1)
 			}
 		})
 	}
-
-	t.Logf("Corpus %s: %d PDFs, signed %d, skipped %d (invalid source)",
-		filepath.Base(zipPath), pdfCount, signedCount, skippedCount)
 }
 
 func testZipPDFFile(t *testing.T, zf *zip.File, cert interface{}, key crypto.Signer) (signed, skipped bool) {

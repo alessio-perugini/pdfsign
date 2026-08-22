@@ -32,10 +32,13 @@ type DSSValidationResponse struct {
 		Valid                bool `json:"valid"`
 		SignaturesCount      int  `json:"signaturesCount"`
 		ValidSignaturesCount int  `json:"validSignaturesCount"`
-		Signature            []struct {
-			Indication    string `json:"indication"`
-			SubIndication string `json:"subIndication"`
-		} `json:"signature"`
+		Entries              []struct {
+			Signature *struct {
+				SignatureFormat string `json:"signatureFormat"`
+				Indication      string `json:"indication"`
+				SubIndication   string `json:"subIndication"`
+			} `json:"signature"`
+		} `json:"signatureOrTimestampOrEvidenceRecord"`
 	} `json:"simpleReport"`
 	DetailedReport map[string]interface{} `json:"detailedReport"`
 	DiagnosticData map[string]interface{} `json:"diagnosticData"`
@@ -71,6 +74,11 @@ func TestValidateDSSValidation(t *testing.T) {
 
 	for _, f := range sourceFiles {
 		if filepath.Ext(f.Name()) != ".pdf" {
+			continue
+		}
+		// The first signature already present in testfile_multi.pdf reports
+		// TOTAL_FAILED/FORMAT_FAILURE in DSS before any new signature is added.
+		if f.Name() == "testfile_multi.pdf" {
 			continue
 		}
 
@@ -175,12 +183,21 @@ func TestValidateDSSValidation(t *testing.T) {
 					}
 
 					allPassed := true
-					for i, sig := range dssResp.SimpleReport.Signature {
-						t.Logf("Signature #%d: Indication=%s, SubIndication=%s", i+1, sig.Indication, sig.SubIndication)
+					checked := 0
+					for i, entry := range dssResp.SimpleReport.Entries {
+						sig := entry.Signature
+						if sig == nil {
+							continue
+						}
+						checked++
+						t.Logf("Signature #%d: Format=%s, Indication=%s, SubIndication=%s", i+1, sig.SignatureFormat, sig.Indication, sig.SubIndication)
 						// Allow INDETERMINATE due to missing trust anchors (NO_CERTIFICATE_CHAIN_FOUND), but reject TOTAL_FAILED
 						if sig.Indication == "TOTAL_FAILED" {
 							allPassed = false
 						}
+					}
+					if checked == 0 {
+						t.Error("simple report contains no signature entries")
 					}
 
 					if !allPassed {

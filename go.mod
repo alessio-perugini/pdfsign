@@ -1,6 +1,6 @@
 module github.com/digitorus/pdfsign
 
-go 1.27.0
+go 1.26.0
 
 require (
 	github.com/digitorus/pdf v0.2.0
@@ -11,3 +11,5 @@ require (
 	golang.org/x/image v0.44.0
 	golang.org/x/text v0.41.0
 )
+
+replace github.com/digitorus/pkcs7 => github.com/alessio-perugini/pkcs7 v0.0.0-20260823190144-e3a5be056941

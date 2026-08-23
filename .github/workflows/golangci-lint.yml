@@ -22,7 +22,7 @@ jobs:
       - name: Set up Go 1.x
         uses: actions/setup-go@v5
         with:
-          go-version: ^1.27
+          go-version: ^1.26
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
@@ -30,7 +30,8 @@ jobs:
           # Require: The version of golangci-lint to use.
           # When `install-mode` is `binary` (default) the value can be v1.2 or v1.2.3 or `latest` to use the latest version.
           # When `install-mode` is `goinstall` the value can be v1.2.3, `latest`, or the hash of a commit.
-          # v2.13.0 is the first release built with and supporting Go 1.27.
+          # Pinned: v2.13.1 is built with a Go toolchain that supports this
+          # repo's `go 1.26.0` directive.
           version: v2.13.1
 
           # Optional: working directory, useful for monorepos
